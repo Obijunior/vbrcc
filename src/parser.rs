@@ -204,7 +204,7 @@ mod tests {
     fn expect_reports_mismatch() {
         let mut parser = Parser::new(vec![Token::Return, Token::EOF]);
         let err = parser.expect(&Token::Int).unwrap_err();
-        assert_eq!(err, "Expected Int, got Return");
+        assert_eq!(err, "[ ERROR ] :: Expected Int, got Return");
     }
 
     #[test]
