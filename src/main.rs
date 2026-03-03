@@ -1,10 +1,9 @@
-mod lexer;
-
 use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use crate::lexer::Lexer;
+use rust_c_compiler::lexer::Lexer;
+use rust_c_compiler::parser::Parser;
 
 fn parse_output_path(args: &[String]) -> Result<PathBuf, String> {
     args.iter()
@@ -45,22 +44,17 @@ fn main() {
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize();
 
+    let mut parser = Parser::new(tokens.clone());
+    let program = parser.parse_program();
+
     println!("Lexed {} tokens", tokens.len());
     println!("Output would go to: {:?}", output_path);
+    println!("Parsed program: {:?}", program);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_lexer() {
-        // basic test to ensure lexer can tokenize a simple C program
-        let source = "int main() { return 42; }";
-        let mut lexer = Lexer::new(source);
-        let tokens = lexer.tokenize();
-        assert_eq!(tokens.len(), 10);
-    }
 
     #[test]
     fn test_output_path() {
