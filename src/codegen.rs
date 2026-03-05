@@ -27,8 +27,8 @@ impl Codegen {
         self.emit(&format!("{}:", func.name));
 
         // Function prologue — set up the stack frame
-        self.emit("  pushq %rbp");
-        self.emit("  movq %rsp, %rbp");
+        self.emit("  push rbp");
+        self.emit("  mov rbp, rsp");
 
         for stmt in &func.body {
             self.gen_statement(stmt)?;
@@ -44,7 +44,7 @@ impl Codegen {
                 self.gen_expr(expr)?;
 
                 // Function epilogue — restore stack and return
-                self.emit("  popq %rbp");
+                self.emit("  pop rbp");
                 self.emit("  ret");
             }
         }
@@ -55,20 +55,20 @@ impl Codegen {
         match expr {
             Expr::IntLiteral(n) => {
                 // Move the literal directly into %rax
-                self.emit(&format!("  movq ${}, %rax", n));
+                self.emit(&format!("  mov rax, {}", n));
             }
 
             Expr::UnaryOp(op, inner) => {
                 // Evaluate the inner expression first (result in %rax)
                 self.gen_expr(inner)?;
                 match op {
-                    UnaryOp::Negate => self.emit("  negq %rax"),
-                    UnaryOp::BitNot => self.emit("  notq %rax"),
+                    UnaryOp::Negate => self.emit("  neg rax"),
+                    UnaryOp::BitNot => self.emit("  not rax"),
                     UnaryOp::LogNot => {
                         // !x: set %rax to 1 if %rax == 0, else 0
-                        self.emit("  cmpq $0, %rax");
+                        self.emit("  cmp rax, $0");
                         self.emit("  mov rax, $0");
-                        self.emit("  sete %al");
+                        self.emit("  sete al");
                     }
                 }
             }
@@ -84,14 +84,14 @@ impl Codegen {
                 self.emit("  pop rax");        // left operand back in rax
 
                 match op {
-                    BinaryOp::Add => self.emit("  addq %rcx, %rax"),
-                    BinaryOp::Sub => self.emit("  subq %rcx, %rax"),
-                    BinaryOp::Mul => self.emit("  imulq %rcx, %rax"),
+                    BinaryOp::Add => self.emit("  add rax, rcx"),
+                    BinaryOp::Sub => self.emit("  sub rax, rcx"),
+                    BinaryOp::Mul => self.emit("  imul rax, rcx"),
                     BinaryOp::Div => {
                         // idivq divides rdx:rax by the operand
                         // cqto sign-extends rax into rdx first
-                        self.emit("  cqto");
-                        self.emit("  idivq %rcx");
+                        self.emit("  cqo");
+                        self.emit("  idiv rcx");
                         // quotient is left in %rax automatically
                     }
                 }
@@ -121,26 +121,26 @@ mod tests {
     #[test]
     fn test_return_literal() {
         let asm = compile("int main() { return 42; }");
-        assert!(asm.contains("movq $42, %rax"));
+        assert!(asm.contains("mov rax, 42"));
         assert!(asm.contains("ret"));
     }
 
     #[test]
     fn test_negate() {
         let asm = compile("int main() { return -42; }");
-        assert!(asm.contains("movq $42, %rax"));
-        assert!(asm.contains("negq %rax"));
+        assert!(asm.contains("mov rax, 42"));
+        assert!(asm.contains("neg rax"));
     }
 
     #[test]
     fn test_addition() {
         let asm = compile("int main() { return 1 + 2; }");
-        assert!(asm.contains("addq %rcx, %rax"));
+        assert!(asm.contains("add rax, rcx"));
     }
 
     #[test]
     fn test_division() {
         let asm = compile("int main() { return 10 / 2; }");
-        assert!(asm.contains("idivq %rcx"));
+        assert!(asm.contains("idiv rcx"));
     }
 }
