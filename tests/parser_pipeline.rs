@@ -1,5 +1,6 @@
 use rust_c_compiler::lexer::Lexer;
-use rust_c_compiler::parser::{BinaryOp, Expr, Function, Parser, Program, Stmt, UnaryOp};
+use rust_c_compiler::parser::Parser;
+use rust_c_compiler::ast::*;
 
 fn parse(source: &str) -> Result<Program, String> {
     let mut lexer = Lexer::new(source);
