@@ -1,13 +1,13 @@
 use std::path::Path;
 use std::process::Command;
 
-pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, use_custom_assembler: bool) -> Result<(), String> {
-    if use_custom_assembler {
+pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, use_gcc: bool) -> Result<(), String> {
+    if use_gcc {
+        assemble_and_link_with_gcc(asm_path, bin_path)?;
+    } else {
         let obj_path = bin_path.with_extension("o");
         run_assembler(asm_path, &obj_path)?;
         link_object(&obj_path, bin_path)?;
-    } else {
-        assemble_and_link_with_gcc(asm_path, bin_path)?;
     }
     Ok(())
 }

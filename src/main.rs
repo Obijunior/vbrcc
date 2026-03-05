@@ -11,12 +11,12 @@ mod assembler_driver;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.c> [-o <output>] [-a]", args[0]);
+        eprintln!("Usage: {} <input.c> [-o <output>] [-gcc]", args[0]);
         process::exit(1);
     }
 
     let input_path = PathBuf::from(&args[1]);
-    let use_custom_assembler = args.iter().any(|a| a == "-a");
+    let use_gcc = args.iter().any(|a| a == "-gcc");
     let output_path = args
         .iter()
         .position(|a| a == "-o")
@@ -76,7 +76,7 @@ fn main() {
 
     // --- Assemble and link ---
     let bin_path = output_path.with_extension("");
-    assembler_driver::assemble_and_link(&asm_path, &bin_path, use_custom_assembler).unwrap_or_else(|e| {
+    assembler_driver::assemble_and_link(&asm_path, &bin_path, use_gcc).unwrap_or_else(|e| {
         eprintln!("[ ERROR ] :: {}", e);
         process::exit(1);
     });

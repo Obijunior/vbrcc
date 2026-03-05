@@ -1,6 +1,8 @@
 /target
 
+# discard artifacts from compilation/testing
 *.o
 *.s
 *.exe
 *.out
+input.c
