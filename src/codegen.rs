@@ -22,6 +22,10 @@ impl Codegen {
     }
 
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
+
+        // make sure gcc can assemble our output by using Intel syntax and no prefixes
+        self.emit("  .intel_syntax noprefix");
+        
         // Emit the function label, visible to the linker
         self.emit(&format!("  .globl {}", func.name));
         self.emit(&format!("{}:", func.name));
