@@ -79,27 +79,6 @@ fn validate_supported_intel_subset(input_text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn assemble_with_gcc(input_s: &Path, output_o: &Path) -> Result<(), String> {
-    let status = process::Command::new("gcc")
-        .args([
-            "-c",
-            input_s
-                .to_str()
-                .ok_or_else(|| "input path is not valid UTF-8".to_string())?,
-            "-o",
-            output_o
-                .to_str()
-                .ok_or_else(|| "output path is not valid UTF-8".to_string())?,
-        ])
-        .status()
-        .map_err(|e| format!("failed to invoke gcc: {}", e))?;
-
-    if !status.success() {
-        return Err(format!("gcc -c failed with status: {}", status));
-    }
-    Ok(())
-}
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
@@ -108,20 +87,14 @@ fn main() {
     }
 
     let input_s = Path::new(&args[1]);
-    let output_o = Path::new(&args[2]);
 
     let source = std::fs::read_to_string(input_s).unwrap_or_else(|e| {
-        eprintln!("[assembler] failed to read {:?}: {}", input_s, e);
+        eprintln!("[ ERROR ] :: [assembler] failed to read {:?}: {}", input_s, e);
         process::exit(1);
     });
 
     if let Err(e) = validate_supported_intel_subset(&source) {
-        eprintln!("[assembler] parse/encode template error: {}", e);
-        process::exit(1);
-    }
-
-    if let Err(e) = assemble_with_gcc(input_s, output_o) {
-        eprintln!("[assembler] {}", e);
+        eprintln!("[ ERROR ] :: [assembler] parse/encode template error: {}", e);
         process::exit(1);
     }
 }
