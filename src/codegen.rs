@@ -25,7 +25,7 @@ impl Codegen {
 
         // make sure gcc can assemble our output by using Intel syntax and no prefixes
         self.emit("  .intel_syntax noprefix");
-        
+
         // Emit the function label, visible to the linker
         self.emit(&format!("  .globl {}", func.name));
         self.emit(&format!("{}:", func.name));
@@ -93,10 +93,10 @@ impl Codegen {
                     BinaryOp::Mul => self.emit("  imul rax, rcx"),
                     BinaryOp::Div => {
                         // idivq divides rdx:rax by the operand
-                        // cqto sign-extends rax into rdx first
+                        // cqo sign-extends rax into rdx first
                         self.emit("  cqo");
                         self.emit("  idiv rcx");
-                        // quotient is left in %rax automatically
+                        // quotient is left in rax automatically
                     }
                 }
             }

@@ -1,258 +1,63 @@
 # VBRCC - Very Basic Rust C Compiler
 
-This is a little hobby project of mine I made to learn more about Rust and how code works at a low level. Working on building an assembler to go with it, but you can still use gcc to assemble by passing `-gcc`. This is built for my machine, so it uses the Intel x86-64 assembly syntax and it's only been tested on a Windows machine.
+This is a small hobby C compiler written in Rust. It currently targets x86-64 (Intel syntax) and includes a tiny custom assembler implemented as a subcrate. You can still use `gcc` as the assembler/linker by passing the `-gcc` flag to the compiler.
 
+## Usage
 
+Run the compiler with Cargo:
 
-Current usage "cargo run -- <input.c> [-o <output_path>] [-gcc]"
+```sh
+cargo run -- <input.c> [-o <output_base>] [-gcc]
+```
 
-No makefile yet, so for now you'll need to run it with cargo, but no other external dependencies
+- Default behavior: uses the custom assembler (Intel x86-64 syntax).
+- Pass `-gcc` to use the system `gcc` to assemble/link instead.
 
-## C Functionality supported by compiler (what I have ast nodes for)
-| ast | symbol |
+## Tests
+
+Run the test suite with:
+
+```sh
+cargo test
+```
+
+## Compiler: C features
+
+The compiler front-end (AST) currently supports the following operators and expressions:
+
+| AST node | Example |
 | --- | --- |
-| Add | + |
-| Sub | - |
-| Mul | * |
-| Div | / |
-| Negate | - |
-| BitNot | ~ |
-| LogNot | ! |
-
-## Instruction Set (currently) supported by assembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retssembler
-
-- mov
-- retassembler
-
-- mov
-- rey assembler
-
-- mov
-- d by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- movd by assembler
-
-- moved by assembler
-
-- moted by assembler
-
-- mrted by assembler
-
-- orted by assembler
-
--ported by assembler
-
-pported by assembler
-pported by assembler
-upported by assemblerupported by assemblerupported by assemblerpported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assemblerported by assembler by assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assemblerby assembler by assembled by assembled by assembted by assemrted by asseorted by assported by aspported by aupported by supported byt supported et supportedSet supporte Set supportn Set supporion Set supption Set supction Set suruction Set truction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Settruction Setruction Setuction Setruction Setruction Sstruction nstructionInstructioed Instructed Instrurted Instrorted Instported Inspported Inupported ISupported # Supporte## Support
-## Suppor
-
-## Supp
-
-## Sups
-
-## Sues
-
-## Sies
-
-## cies
-
-##ncies
-
-#encies
-
-dencies
-ndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesndenciesdenciesenciesnciesndencendenependdepen depel depnal drnal ernalternaxternexter exter exter exher ether other no ot no ut nobut n but , buto, burgo, argo,cargod cared caeed cneed u neeou neyou n you w youow yonow y now r nowor nofor n for  but , bute, buble, able,tableutablcutabecutaxecutexecu execn exean ex an es an as ant as s an able teabluteabcuteaecuteexecu execn exean ex an es an t as it as it ae it kage ackagpacka packll paI'll  I'lly I'lly I'lly Ially uallytuallntualentua
-Even
-Eve"
-Ev]"
-Ec]"
-]"
-
-c]"
-cc]"gcc]-gcc[-gc [-g> [-h> [th> ath>path_patt_paput_tpututpuoutp<out <ou] <oo] <-o] [-o] [-o> [-c> [.c> t.c>ut.cnputinpu<inp <in- <i-- < -- n --un -run  runo rurgo argocarg"car "cae "cge "age sageusag usat usent renturreCurr
-Cur
-Cu
-
-C
-
-l
-elle lw owlo la t  as ksrke deod cw  hd ndt stus Rt utou ae remo mn rnareale lo e deadI  Ie neinmi mf of ot ecjero py byobho he tlttitli la s s ishiTh
-T
-
-
-
-####  tthhiishith# ##
-## 
-#
-
+| Add | `a + b` |
+| Sub | `a - b` |
+| Mul | `a * b` |
+| Div | `a / b` |
+| Negate | `-a` |
+| BitNot | `~a` |
+| LogNot | `!a` |
+
+## Assembler: currently supported features
+
+The custom assembler (subcrate `src/assembler`) currently supports a small subset of Intel x86-64 instructions and registers. Important notes:
+
+- Syntax: Intel syntax (the assembler accepts `.intel_syntax noprefix`).
+- Registers: all 64-bit general-purpose registers are recognised (RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, R8-R15).
+- Supported instructions (textual forms accepted by the assembler):
+  - `ret`
+  - `push <reg>`
+  - `pop <reg>`
+  - `mov <reg>, <reg>` and `mov <reg>, <imm>` (imm is a 64-bit integer)
+  - `add <reg>, <reg>`
+  - `sub <reg>, <reg>`
+
+### Notes and limitations
+
+- The assembler currently encodes instructions into raw machine bytes and writes them to the output file. It does not emit a full object file format (ELF/COFF). Because of that, passing the produced file directly to `gcc` as an object file will usually fail. The project contains an `assembler_driver` that attempts to run the assembler and then call `gcc` to link; that driver is a work-in-progress and may require changes to produce linkable object files.
+- Labels, relocations and multi-section object support are not implemented yet — those are planned enhancements.
+- The assembler code includes an encoder for `imul`, but the textual parser does not accept `imul` at the moment.
+
+## Contributing / next steps
+
+- Improve the assembler to emit proper object files or emit GAS-compatible assembly.
+- Add more instructions and addressing modes to the assembler.
+- Extend the code generator to support more C features and proper ABI handling.enerator to support more C features and proper ABI handling.
+ emit COFF/PE object files on Windows so `gcc` can link them).
