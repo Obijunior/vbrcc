@@ -27,7 +27,6 @@ The compiler front-end (AST) currently supports the following operators and expr
 
 | AST node | Example |
 | --- | --- |
-<<<<<<< HEAD
 | Add | `a + b` |
 | Sub | `a - b` |
 | Mul | `a * b` |
@@ -61,18 +60,3 @@ The custom assembler (subcrate `src/assembler`) currently supports a small subse
 - Improve the assembler to emit proper object files or emit GAS-compatible assembly.
 - Add more instructions and addressing modes to the assembler.
 - Extend the code generator to support more C features and proper ABI handling.enerator to support more C features and proper ABI handling.
- emit COFF/PE object files on Windows so `gcc` can link them).
-=======
-| Add | + |
-| Sub | - |
-| Mul | * |
-| Div | / |
-| Negate | - |
-| BitNot | ~ |
-| LogNot | ! |
-
-## Instruction Set (currently) supported by assembler
-
-- mov
-- ret
->>>>>>> 3c37ce23f8992ea75b8b983087e5579f60575a1e
