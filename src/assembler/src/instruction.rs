@@ -4,6 +4,7 @@ pub enum AsmLine {
     Instruction(Instruction),
     SectionChange(Section),
     DataBytes(Vec<u8>),
+    Label(String),
     None,
 }
 
@@ -20,9 +21,11 @@ pub enum Instruction {
     ImulRegReg { dst: Register64, src: Register64 },
     PushReg { reg: Register64 },
     PopReg { reg: Register64 },
+    LeaRegLabel { dst: Register64, label: String },
+    CallLabel { label: String },
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum Section {
     Text,
     Data,
@@ -82,8 +85,17 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
         }
     }
 
-    // Allow passthrough for labels/directives for now.
-    if line.ends_with(':') || line.starts_with('.') { return Ok(AsmLine::None); }
+    // Labels
+    if line.ends_with(':') {
+        let name = line.trim_end_matches(':').trim().to_string();
+        if name.is_empty() {
+            return Err(format!("[ ERROR ] :: empty label: {}", raw));
+        }
+        return Ok(AsmLine::Label(name));
+    }
+
+    // Allow passthrough for directives for now.
+    if line.starts_with('.') { return Ok(AsmLine::None); }
 
     let (opcode, operands) = split_instruction(line);
 
@@ -135,6 +147,32 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 };
                 Ok(AsmLine::Instruction(instr))
             }
+        }
+        "lea" => {
+            if operands.len() != 2 {
+                return Err(format!("[ ERROR ] :: lea expects 2 operands: {}", raw));
+            }
+            let dst = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+            let src = operands[1].trim();
+            if !(src.starts_with('[') && src.ends_with(']')) {
+                return Err(format!("[ ERROR ] :: lea expects [label] operand: {}", raw));
+            }
+            let label = src[1..src.len() - 1].trim().to_string();
+            if label.is_empty() {
+                return Err(format!("[ ERROR ] :: lea label is empty: {}", raw));
+            }
+            Ok(AsmLine::Instruction(Instruction::LeaRegLabel { dst, label }))
+        }
+        "call" => {
+            if operands.len() != 1 {
+                return Err(format!("[ ERROR ] :: call expects 1 operand: {}", raw));
+            }
+            let label = operands[0].trim().to_string();
+            if label.is_empty() {
+                return Err(format!("[ ERROR ] :: call target is empty: {}", raw));
+            }
+            Ok(AsmLine::Instruction(Instruction::CallLabel { label }))
         }
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
     }
