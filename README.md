@@ -10,7 +10,7 @@ Run the compiler with Cargo:
 cargo run -- <input.c> [-o <output_base>] [-gcc]
 ```
 
-- Default behavior: uses the custom assembler (Intel x86-64 syntax).
+- Default behavior: uses the custom assembler (Intel x86-64 syntax), while still using `gcc` as a linker.
 - Pass `-gcc` to use the system `gcc` to assemble/link instead.
 
 ## Tests

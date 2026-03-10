@@ -76,7 +76,12 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Return(expr))
             }
-            other => Err(format!("[ ERROR ] :: Unexpected token in statement: {:?}", other)),
+            _ => {
+                let expr = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::Return(expr))
+            }
+            // other => Err(format!("[ ERROR ] :: Unexpected token in statement: {:?}", other)),
         }
     }
 
@@ -141,8 +146,25 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.advance().clone() {
             Token::IntLiteral(n) => Ok(Expr::IntLiteral(n)),
-            Token::Ident(s)      => Ok(Expr::Var(s)),
-            Token::LParen        => {
+            Token::StringLiteral(s) => Ok(Expr::StringLiteral(s)),
+            Token::Ident(name) => {
+                // if next token is '(' it's a function call
+                if self.current() == &Token::LParen {
+                    self.advance(); // consume '('
+                    let mut args = Vec::new();
+                    while self.current() != &Token::RParen {
+                        args.push(self.parse_expr()?);
+                        if self.current() == &Token::Comma {
+                            self.advance(); // consume ','
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    Ok(Expr::FunctionCall { name, args })
+                } else {
+                    Ok(Expr::Var(name))
+                }
+            }
+            Token::LParen => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 Ok(expr)

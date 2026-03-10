@@ -42,6 +42,22 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             vec![r, 0x29, m]
         }
 
+        Instruction::AndRegReg { dst, src } => {
+            // Opcode 0x21 is AND r/m64, r64
+            let r = rex(true, src.ext(), false, dst.ext());
+            let m = modrm(0b11, src.low3(), dst.low3());
+            vec![r, 0x21, m]
+        }
+
+        Instruction::AndRegImm32 { dst, imm } => {
+            // Opcode 0x81 /4 is AND r/m64, imm32 (sign-extended)
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b100, dst.low3()); // /4 in reg field
+            let mut out = vec![r, 0x81, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
+        }
+
         Instruction::ImulRegReg { dst, src } => {
             // Opcode 0x0F AF is IMUL r64, r/m64
             let r = rex(true, dst.ext(), false, src.ext());

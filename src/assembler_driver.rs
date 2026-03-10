@@ -46,7 +46,7 @@ fn link_object(obj_path: &Path, bin_path: &Path) -> Result<(), String> {
                 .to_str()
                 .ok_or_else(|| "bin path is not valid UTF-8".to_string())?,
             "-mconsole", // Link as a console application (no GUI subsystem)
-            "-nostartfiles", // Don't link the standard startup files (we provide our own entry point)
+            // "-nostartfiles",
         ])
         .status()
         .map_err(|e| format!("Failed to link with gcc: {}", e))?;

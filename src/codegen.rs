@@ -2,11 +2,17 @@ use crate::ast::*;
 
 pub struct Codegen {
     output: String,
+    data_section: String,
+    string_count: usize,
 }
 
 impl Codegen {
     pub fn new() -> Self {
-        Codegen { output: String::new() }
+        Codegen { 
+            output: String::new(), 
+            data_section: String::new(),
+            string_count: 0,
+        }
     }
 
     fn emit(&mut self, line: &str) {
@@ -14,11 +20,39 @@ impl Codegen {
         self.output.push('\n');
     }
 
+    fn emit_data(&mut self, line: &str) {
+        self.data_section.push_str(line);
+        self.data_section.push('\n');
+    }
+
+    fn add_string(&mut self, s: &str) -> String {
+        let label = format!("str_{}", self.string_count);
+        self.string_count += 1;
+        self.emit_data(&format!("  .section .data"));
+        self.emit_data(&format!("{}:", label));
+        self.emit_data(&format!("    .ascii \"{}\\0\"", s.escape_default()));
+        label
+    }
+
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
+        // Reserve space for data section (filled in as we go)
         for function in &program.functions {
             self.gen_function(function)?;
         }
-        Ok(self.output.clone())
+
+        // Assemble final output: data section first, then text
+        let mut final_output = String::new();
+        
+        if !self.data_section.is_empty() {
+            final_output.push_str("section .data\n");
+            final_output.push_str(&self.data_section);
+            final_output.push('\n');
+        }
+
+        final_output.push_str("section .text\n");
+        final_output.push_str(&self.output);
+
+        Ok(final_output)
     }
 
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
@@ -34,6 +68,8 @@ impl Codegen {
         self.emit("  push rbp");
         self.emit("  mov rbp, rsp");
 
+        self.emit("  and rsp, -16"); // align stack to 16 bytes for calls
+
         for stmt in &func.body {
             self.gen_statement(stmt)?;
         }
@@ -44,12 +80,13 @@ impl Codegen {
     fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Return(expr) => {
-                // Evaluate expr, result ends up in %rax
                 self.gen_expr(expr)?;
-
-                // Function epilogue — restore stack and return
+                self.emit(" mov rsp, rbp");
                 self.emit("  pop rbp");
                 self.emit("  ret");
+            }
+            Stmt::Expr(expr) => {
+                self.gen_expr(expr)?;
             }
         }
         Ok(())
@@ -62,6 +99,30 @@ impl Codegen {
                 self.emit(&format!("  mov rax, {}", n));
             }
 
+            Expr::StringLiteral(s) => {
+                let label = self.add_string(s);
+                self.emit(&format!("  lea rax, [{}]", label));
+            }
+
+            Expr::FunctionCall {name, args} => {
+                let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+                if args.len() > arg_regs.len() {
+                    return Err(format!("[ ERROR ] :: Function calls with more than {} arguments not supported", arg_regs.len()));
+                }
+
+                for (i, arg) in args.iter().enumerate() {
+                    self.gen_expr(arg)?;
+                    self.emit(&format!("  mov {}, rax", arg_regs[i]));
+                }
+
+                for i in (0..args.len()).rev() {
+                    self.emit(&format!("  pop {}", arg_regs[i]));
+                }
+
+                self.emit(" mov rax, 0"); 
+                self.emit(&format!("  call {}", name));
+            }
+
             Expr::UnaryOp(op, inner) => {
                 // Evaluate the inner expression first (result in %rax)
                 self.gen_expr(inner)?;
@@ -70,8 +131,8 @@ impl Codegen {
                     UnaryOp::BitNot => self.emit("  not rax"),
                     UnaryOp::LogNot => {
                         // !x: set %rax to 1 if %rax == 0, else 0
-                        self.emit("  cmp rax, $0");
-                        self.emit("  mov rax, $0");
+                        self.emit("  cmp rax, 0");
+                        self.emit("  mov rax, 0");
                         self.emit("  sete al");
                     }
                 }
@@ -79,8 +140,8 @@ impl Codegen {
 
             Expr::BinaryOp(op, left, right) => {
                 // Evaluate left, push to stack
-                // Evaluate right, result in %rax
-                // Pop left into %rcx, perform op
+                // Evaluate right, result in rax
+                // Pop left into rcx, perform op
                 self.gen_expr(left)?;
                 self.emit("  push rax");
                 self.gen_expr(right)?;

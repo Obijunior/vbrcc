@@ -15,6 +15,8 @@ pub enum Instruction {
     MovRegReg { dst: Register64, src: Register64 },
     AddRegReg { dst: Register64, src: Register64 },
     SubRegReg { dst: Register64, src: Register64 },
+    AndRegReg { dst: Register64, src: Register64 },
+    AndRegImm32 { dst: Register64, imm: i32 },
     ImulRegReg { dst: Register64, src: Register64 },
     PushReg { reg: Register64 },
     PopReg { reg: Register64 },
@@ -105,13 +107,17 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 .ok_or_else(|| format!("[ ERROR ] :: invalid register in pop: {}", raw))?;
             Ok(AsmLine::Instruction(Instruction::PopReg { reg }))
         }
-        "mov" | "add" | "sub" => {
+        "mov" | "add" | "sub" | "and" => {
             let dst = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
             
             if let Ok(imm) = operands[1].parse::<i64>() {
                 if opcode.eq_ignore_ascii_case("mov") {
                     Ok(AsmLine::Instruction(Instruction::MovRegImm64 { dst, imm })) 
+                } else if opcode.eq_ignore_ascii_case("and") {
+                    let imm32 = i32::try_from(imm)
+                        .map_err(|_| format!("[ ERROR ] :: and immediate out of 32-bit range: {}", raw))?;
+                    Ok(AsmLine::Instruction(Instruction::AndRegImm32 { dst, imm: imm32 }))
                 } else {
                     Err(format!("[ ERROR ] :: only mov supports immediates: {}", raw))
                 }
@@ -123,6 +129,7 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                     "mov" => Instruction::MovRegReg { dst, src },
                     "add" => Instruction::AddRegReg { dst, src },
                     "sub" => Instruction::SubRegReg { dst, src },
+                    "and" => Instruction::AndRegReg { dst, src },
                     "imul" => Instruction::ImulRegReg { dst, src },
                     _ => unreachable!(),
                 };
