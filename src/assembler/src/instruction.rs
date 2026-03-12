@@ -61,8 +61,8 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     let mut line = raw.trim();
     if line.is_empty() || line.starts_with(';') { return Ok(AsmLine::None); }
 
-    // Handle Section Directives
-    if line.starts_with("section") {
+    // Handle Section Directives: "section .text" or ".section .text"
+    if line.starts_with("section") || line.starts_with(".section") {
         let parts: Vec<&str> = line.split_whitespace().collect();
         return match parts.get(1) {
             Some(&".text") => Ok(AsmLine::SectionChange(Section::Text)),
@@ -75,6 +75,38 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     if line.starts_with("db") {
         let content = line.strip_prefix("db").unwrap().trim();
         let bytes = content.replace("\"", "").as_bytes().to_vec();
+        return Ok(AsmLine::DataBytes(bytes));
+    }
+
+    // Handle .ascii "..." with basic escapes
+    if line.starts_with(".ascii") {
+        let content = line.strip_prefix(".ascii").unwrap().trim();
+        if !(content.starts_with('"') && content.ends_with('"')) {
+            return Err(format!("[ ERROR ] :: .ascii expects quoted string: {}", raw));
+        }
+        let inner = &content[1..content.len() - 1];
+        let mut bytes = Vec::new();
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => bytes.push(b'\n'),
+                    Some('t') => bytes.push(b'\t'),
+                    Some('"') => bytes.push(b'"'),
+                    Some('\\') => bytes.push(b'\\'),
+                    Some('0') => bytes.push(0),
+                    Some(other) => {
+                        return Err(format!("[ ERROR ] :: unknown escape \\{} in .ascii: {}", other, raw));
+                    }
+                    None => return Err(format!("[ ERROR ] :: unterminated escape in .ascii: {}", raw)),
+                }
+            } else {
+                if c as u32 > 0x7F {
+                    return Err(format!("[ ERROR ] :: non-ASCII in .ascii not supported: {}", raw));
+                }
+                bytes.push(c as u8);
+            }
+        }
         return Ok(AsmLine::DataBytes(bytes));
     }
 
@@ -95,6 +127,9 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     }
 
     // Allow passthrough for directives for now.
+    if line.starts_with(".intel_syntax") || line.starts_with(".globl") {
+        return Ok(AsmLine::None);
+    }
     if line.starts_with('.') { return Ok(AsmLine::None); }
 
     let (opcode, operands) = split_instruction(line);
@@ -158,7 +193,14 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             if !(src.starts_with('[') && src.ends_with(']')) {
                 return Err(format!("[ ERROR ] :: lea expects [label] operand: {}", raw));
             }
-            let label = src[1..src.len() - 1].trim().to_string();
+            let inner = src[1..src.len() - 1].trim();
+            let label = if inner.starts_with("rip +") {
+                inner["rip +".len()..].trim().to_string()
+            } else if inner.starts_with("rip+") {
+                inner["rip+".len()..].trim().to_string()
+            } else {
+                inner.to_string()
+            };
             if label.is_empty() {
                 return Err(format!("[ ERROR ] :: lea label is empty: {}", raw));
             }

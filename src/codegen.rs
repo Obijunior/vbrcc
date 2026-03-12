@@ -44,12 +44,12 @@ impl Codegen {
         let mut final_output = String::new();
         
         if !self.data_section.is_empty() {
-            final_output.push_str("section .data\n");
+            final_output.push_str(".section .data\n");
             final_output.push_str(&self.data_section);
             final_output.push('\n');
         }
 
-        final_output.push_str("section .text\n");
+        final_output.push_str(".section .text\n");
         final_output.push_str(&self.output);
 
         Ok(final_output)
@@ -101,7 +101,7 @@ impl Codegen {
 
             Expr::StringLiteral(s) => {
                 let label = self.add_string(s);
-                self.emit(&format!("  lea rax, [{}]", label));
+                self.emit(&format!("  lea rax, [rip + {}]", label));
             }
 
             Expr::FunctionCall {name, args} => {

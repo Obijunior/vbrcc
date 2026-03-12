@@ -123,6 +123,7 @@ impl Lexer {
             Some('!') => { self.advance(); Token::Bang },
             Some('~') => { self.advance(); Token::Tilde },
             Some('=') => { self.advance(); Token::Equals },
+            Some(':') => { self.advance(); Token::Colon },
             None => Token::EOF,
             other => panic!("Unexpected character: {:?}", other),
         }

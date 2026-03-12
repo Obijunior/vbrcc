@@ -1,6 +1,6 @@
 // use crate::register::Register64;
 use crate::instruction::{Instruction, Section};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn rex(w: bool, r: bool, x: bool, b: bool) -> u8 {
     0x40 | ((w as u8) << 3) | ((r as u8) << 2) | ((x as u8) << 1) | (b as u8)
@@ -25,6 +25,15 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::PopReg { reg } => if reg.ext() { 2 } else { 1 },
         Instruction::LeaRegLabel { .. } => 7,
         Instruction::CallLabel { .. } => 5,
+    }
+}
+
+pub fn encoded_len_with_labels(instruction: &Instruction, label_set: &HashSet<String>) -> usize {
+    match instruction {
+        Instruction::CallLabel { label } => {
+            if label_set.contains(label) { 5 } else { 6 }
+        }
+        _ => encoded_len(instruction),
     }
 }
 
@@ -110,6 +119,7 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
 pub fn encode_with_labels(
     instruction: &Instruction,
     labels: &HashMap<String, (Section, usize)>,
+    externs: &HashMap<String, u32>,
     instr_rva: u32,
     text_rva: u32,
     data_rva: u32,
@@ -134,20 +144,30 @@ pub fn encode_with_labels(
             Ok(out)
         }
         Instruction::CallLabel { label } => {
-            let (section, offset) = labels
-                .get(label)
-                .ok_or_else(|| format!("[ ERROR ] :: unknown label: {}", label))?;
-            if *section != Section::Text {
-                return Err(format!("[ ERROR ] :: call target must be in .text: {}", label));
+            if let Some((section, offset)) = labels.get(label) {
+                if *section != Section::Text {
+                    return Err(format!("[ ERROR ] :: call target must be in .text: {}", label));
+                }
+                let target_rva = text_rva + (*offset as u32);
+                let next_rva = instr_rva + 5;
+                let disp = (target_rva as i64) - (next_rva as i64);
+                let disp32 = i32::try_from(disp)
+                    .map_err(|_| format!("[ ERROR ] :: call target out of range: {}", label))?;
+                let mut out = vec![0xE8];
+                out.extend_from_slice(&disp32.to_le_bytes());
+                Ok(out)
+            } else if let Some(&iat_rva) = externs.get(label) {
+                // call qword ptr [rip + disp32] -> FF /2
+                let next_rva = instr_rva + 6;
+                let disp = (iat_rva as i64) - (next_rva as i64);
+                let disp32 = i32::try_from(disp)
+                    .map_err(|_| format!("[ ERROR ] :: call target out of range: {}", label))?;
+                let mut out = vec![0xFF, 0x15];
+                out.extend_from_slice(&disp32.to_le_bytes());
+                Ok(out)
+            } else {
+                Err(format!("[ ERROR ] :: unknown label: {}", label))
             }
-            let target_rva = text_rva + (*offset as u32);
-            let next_rva = instr_rva + encoded_len(instruction) as u32;
-            let disp = (target_rva as i64) - (next_rva as i64);
-            let disp32 = i32::try_from(disp)
-                .map_err(|_| format!("[ ERROR ] :: call target out of range: {}", label))?;
-            let mut out = vec![0xE8];
-            out.extend_from_slice(&disp32.to_le_bytes());
-            Ok(out)
         }
         _ => Ok(encode(instruction)),
     }

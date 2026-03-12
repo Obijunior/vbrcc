@@ -75,7 +75,13 @@ fn main() {
     println!("Wrote assembly to {:?}", asm_path);
 
     // --- Assemble and link ---
-    let bin_path = output_path.with_extension("");
+    let bin_path = if use_gcc {
+        output_path.with_extension("")
+    } else if output_path.extension().is_none() {
+        output_path.with_extension("exe")
+    } else {
+        output_path.clone()
+    };
     assembler_driver::assemble_and_link(&asm_path, &bin_path, use_gcc).unwrap_or_else(|e| {
         eprintln!("[ ERROR ] :: {}", e);
         process::exit(1);
