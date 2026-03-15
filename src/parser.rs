@@ -79,7 +79,7 @@ impl Parser {
             _ => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Return(expr))
+                Ok(Stmt::Expr(expr))
             }
             // other => Err(format!("[ ERROR ] :: Unexpected token in statement: {:?}", other)),
         }
@@ -207,5 +207,12 @@ mod tests {
         ]);
         let expr = parser.parse_primary().unwrap();
         assert_eq!(expr, Expr::IntLiteral(9));
+    }
+
+    #[test]
+    fn parse_expression_statement() {
+        let mut parser = Parser::new(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::Expr(Expr::IntLiteral(7)));
     }
 }
