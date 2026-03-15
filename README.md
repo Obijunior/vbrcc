@@ -7,11 +7,11 @@ This is a small hobby C compiler written in Rust. It currently targets x86-64 (I
 Run the compiler with Cargo:
 
 ```sh
-cargo run -- <input.c> [-o <output_base>] [-gcc]
+cargo run -- <input.c> [-o <output_file>] [--gcc]
 ```
 
 - Default behavior: uses the custom assembler (Intel x86-64 syntax), while still using `gcc` as a linker.
-- Pass `-gcc` to use the system `gcc` to assemble/link instead.
+- Pass `--gcc` to use the system `gcc` to assemble/link instead.
 
 ## Tests
 
@@ -48,6 +48,11 @@ The custom assembler (subcrate `src/assembler`) currently supports a small subse
   - `mov <reg>, <reg>` and `mov <reg>, <imm>` (imm is a 64-bit integer)
   - `add <reg>, <reg>`
   - `sub <reg>, <reg>`
+
+### Fun side notes
+
+- if you run `objdump -d -M intel <output file>` you can see the disassembled assembly contained in the executeable. Doing a comparison between the output from my assembler and from when the --gcc flag is passed produces some pretty interesting results
+- running `hexdump -v -e '1/1 "%02x "' <output file>` will give the raw hex from the executeable in a big chunk
 
 ### Notes and limitations
 
