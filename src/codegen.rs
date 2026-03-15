@@ -67,8 +67,8 @@ impl Codegen {
         // Function prologue — set up the stack frame
         self.emit("  push rbp");
         self.emit("  mov rbp, rsp");
-
-        self.emit("  and rsp, -16"); // align stack to 16 bytes for calls
+        // Windows x64 ABI: reserve 32-byte shadow space, keep 16-byte alignment
+        self.emit("  sub rsp, 32");
 
         for stmt in &func.body {
             self.gen_statement(stmt)?;
@@ -105,7 +105,8 @@ impl Codegen {
             }
 
             Expr::FunctionCall {name, args} => {
-                let arg_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+                // Windows x64 calling convention: RCX, RDX, R8, R9
+                let arg_regs = ["rcx", "rdx", "r8", "r9"];
                 if args.len() > arg_regs.len() {
                     return Err(format!("[ ERROR ] :: Function calls with more than {} arguments not supported", arg_regs.len()));
                 }
@@ -113,13 +114,10 @@ impl Codegen {
                 for (i, arg) in args.iter().enumerate() {
                     self.gen_expr(arg)?;
                     self.emit(&format!("  mov {}, rax", arg_regs[i]));
+                    // Home space for varargs: spill register args into shadow space
+                    self.emit(&format!("  mov [rsp + {}], {}", i * 8, arg_regs[i]));
                 }
 
-                for i in (0..args.len()).rev() {
-                    self.emit(&format!("  pop {}", arg_regs[i]));
-                }
-
-                self.emit(" mov rax, 0"); 
                 self.emit(&format!("  call {}", name));
             }
 

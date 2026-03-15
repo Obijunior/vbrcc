@@ -16,7 +16,7 @@ fn main() {
     }
 
     let input_path = PathBuf::from(&args[1]);
-    let use_gcc = args.iter().any(|a| a == "-gcc");
+    let use_gcc = args.iter().any(|a| a == "-gcc" || a == "--gcc");
     let output_path = args
         .iter()
         .position(|a| a == "-o")

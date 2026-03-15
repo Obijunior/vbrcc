@@ -15,7 +15,9 @@ pub enum Instruction {
     MovRegImm64 { dst: Register64, imm: i64 },
     MovRegReg { dst: Register64, src: Register64 },
     AddRegReg { dst: Register64, src: Register64 },
+    AddRegImm32 { dst: Register64, imm: i32 },
     SubRegReg { dst: Register64, src: Register64 },
+    SubRegImm32 { dst: Register64, imm: i32 },
     AndRegReg { dst: Register64, src: Register64 },
     AndRegImm32 { dst: Register64, imm: i32 },
     ImulRegReg { dst: Register64, src: Register64 },
@@ -165,8 +167,16 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                     let imm32 = i32::try_from(imm)
                         .map_err(|_| format!("[ ERROR ] :: and immediate out of 32-bit range: {}", raw))?;
                     Ok(AsmLine::Instruction(Instruction::AndRegImm32 { dst, imm: imm32 }))
+                } else if opcode.eq_ignore_ascii_case("add") {
+                    let imm32 = i32::try_from(imm)
+                        .map_err(|_| format!("[ ERROR ] :: add immediate out of 32-bit range: {}", raw))?;
+                    Ok(AsmLine::Instruction(Instruction::AddRegImm32 { dst, imm: imm32 }))
+                } else if opcode.eq_ignore_ascii_case("sub") {
+                    let imm32 = i32::try_from(imm)
+                        .map_err(|_| format!("[ ERROR ] :: sub immediate out of 32-bit range: {}", raw))?;
+                    Ok(AsmLine::Instruction(Instruction::SubRegImm32 { dst, imm: imm32 }))
                 } else {
-                    Err(format!("[ ERROR ] :: only mov supports immediates: {}", raw))
+                    Err(format!("[ ERROR ] :: only mov/add/sub/and support immediates: {}", raw))
                 }
             } else {
                 let src = parse_register64(operands[1])

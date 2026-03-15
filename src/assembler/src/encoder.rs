@@ -17,7 +17,9 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::MovRegImm64 { .. } => 10,
         Instruction::MovRegReg { .. } => 3,
         Instruction::AddRegReg { .. } => 3,
+        Instruction::AddRegImm32 { .. } => 7,
         Instruction::SubRegReg { .. } => 3,
+        Instruction::SubRegImm32 { .. } => 7,
         Instruction::AndRegReg { .. } => 3,
         Instruction::AndRegImm32 { .. } => 7,
         Instruction::ImulRegReg { .. } => 4,
@@ -63,11 +65,29 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             vec![r, 0x01, m]
         }
 
+        Instruction::AddRegImm32 { dst, imm } => {
+            // Opcode 0x81 /0 is ADD r/m64, imm32 (sign-extended)
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b000, dst.low3());
+            let mut out = vec![r, 0x81, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
+        }
+
         Instruction::SubRegReg { dst, src } => {
             // Opcode 0x29 is SUB r/m64, r64
             let r = rex(true, src.ext(), false, dst.ext());
             let m = modrm(0b11, src.low3(), dst.low3());
             vec![r, 0x29, m]
+        }
+
+        Instruction::SubRegImm32 { dst, imm } => {
+            // Opcode 0x81 /5 is SUB r/m64, imm32 (sign-extended)
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b101, dst.low3());
+            let mut out = vec![r, 0x81, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
         }
 
         Instruction::AndRegReg { dst, src } => {

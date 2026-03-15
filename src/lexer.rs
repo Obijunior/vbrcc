@@ -4,7 +4,7 @@ pub enum Token {
     // literals + identifiers
     IntLiteral(i64),
     StringLiteral(String),
-    Register(String), 
+    // Register(String), <-- commenting to keep the warnings quiet
     Ident(String),
 
     // keywords
