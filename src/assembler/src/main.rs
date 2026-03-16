@@ -35,7 +35,7 @@ fn build_import_section(externs: &[String], idata_rva: u32) -> (Vec<u8>, HashMap
     names.sort();
     names.dedup();
 
-    let dll_name = "msvcrt.dll";
+    let dll_name = "ucrtbase.dll";
     let n = names.len();
 
     let desc_offset = 0usize;

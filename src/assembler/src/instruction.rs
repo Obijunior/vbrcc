@@ -14,6 +14,8 @@ pub enum Instruction {
     Syscall,
     MovRegImm64 { dst: Register64, imm: i64 },
     MovRegReg { dst: Register64, src: Register64 },
+    MovMemDispReg { base: Register64, disp: i32, src: Register64 },
+    MovRegMemDisp { dst: Register64, base: Register64, disp: i32 },
     AddRegReg { dst: Register64, src: Register64 },
     AddRegImm32 { dst: Register64, imm: i32 },
     SubRegReg { dst: Register64, src: Register64 },
@@ -57,6 +59,26 @@ fn split_instruction(line: &str) -> (&str, Vec<&str>) {
         rest.split(',').map(|s| s.trim()).collect()
     };
     (opcode, operands)    
+}
+
+fn parse_mem_operand(op: &str) -> Option<(Register64, i32)> {
+    let s = op.trim();
+    if !(s.starts_with('[') && s.ends_with(']')) {
+        return None;
+    }
+    let inner = s[1..s.len() - 1].trim();
+    if let Some((base_str, disp_str)) = inner.split_once('+') {
+        let base = parse_register64(base_str.trim())?;
+        let disp = disp_str.trim().parse::<i32>().ok()?;
+        Some((base, disp))
+    } else if let Some((base_str, disp_str)) = inner.split_once('-') {
+        let base = parse_register64(base_str.trim())?;
+        let disp = disp_str.trim().parse::<i32>().ok()?;
+        Some((base, -disp))
+    } else {
+        let base = parse_register64(inner)?;
+        Some((base, 0))
+    }
 }
 
 pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
@@ -156,14 +178,42 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 .ok_or_else(|| format!("[ ERROR ] :: invalid register in pop: {}", raw))?;
             Ok(AsmLine::Instruction(Instruction::PopReg { reg }))
         }
-        "mov" | "add" | "sub" | "and" => {
+        "mov" => {
+            if operands.len() != 2 {
+                return Err(format!("[ ERROR ] :: mov expects 2 operands: {}", raw));
+            }
+
+            // mov [base +/- disp], reg
+            if let Some((base, disp)) = parse_mem_operand(operands[0]) {
+                let src = parse_register64(operands[1])
+                    .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
+                return Ok(AsmLine::Instruction(Instruction::MovMemDispReg { base, disp, src }));
+            }
+
+            // mov reg, [base +/- disp]
+            if let Some((base, disp)) = parse_mem_operand(operands[1]) {
+                let dst = parse_register64(operands[0])
+                    .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+                return Ok(AsmLine::Instruction(Instruction::MovRegMemDisp { dst, base, disp }));
+            }
+
             let dst = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
-            
+
             if let Ok(imm) = operands[1].parse::<i64>() {
-                if opcode.eq_ignore_ascii_case("mov") {
-                    Ok(AsmLine::Instruction(Instruction::MovRegImm64 { dst, imm })) 
-                } else if opcode.eq_ignore_ascii_case("and") {
+                Ok(AsmLine::Instruction(Instruction::MovRegImm64 { dst, imm }))
+            } else {
+                let src = parse_register64(operands[1])
+                    .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
+                Ok(AsmLine::Instruction(Instruction::MovRegReg { dst, src }))
+            }
+        }
+        "add" | "sub" | "and" => {
+            let dst = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+
+            if let Ok(imm) = operands[1].parse::<i64>() {
+                if opcode.eq_ignore_ascii_case("and") {
                     let imm32 = i32::try_from(imm)
                         .map_err(|_| format!("[ ERROR ] :: and immediate out of 32-bit range: {}", raw))?;
                     Ok(AsmLine::Instruction(Instruction::AndRegImm32 { dst, imm: imm32 }))
@@ -176,18 +226,16 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                         .map_err(|_| format!("[ ERROR ] :: sub immediate out of 32-bit range: {}", raw))?;
                     Ok(AsmLine::Instruction(Instruction::SubRegImm32 { dst, imm: imm32 }))
                 } else {
-                    Err(format!("[ ERROR ] :: only mov/add/sub/and support immediates: {}", raw))
+                    Err(format!("[ ERROR ] :: only add/sub/and support immediates: {}", raw))
                 }
             } else {
                 let src = parse_register64(operands[1])
                     .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
-                
+
                 let instr = match opcode.to_ascii_lowercase().as_str() {
-                    "mov" => Instruction::MovRegReg { dst, src },
                     "add" => Instruction::AddRegReg { dst, src },
                     "sub" => Instruction::SubRegReg { dst, src },
                     "and" => Instruction::AndRegReg { dst, src },
-                    "imul" => Instruction::ImulRegReg { dst, src },
                     _ => unreachable!(),
                 };
                 Ok(AsmLine::Instruction(instr))

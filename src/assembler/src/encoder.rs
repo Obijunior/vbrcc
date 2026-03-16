@@ -10,12 +10,50 @@ fn modrm(mod_bits: u8, reg: u8, rm: u8) -> u8 {
     ((mod_bits & 0b11) << 6) | ((reg & 0b111) << 3) | (rm & 0b111)
 }
 
+fn mem_disp_len(base_low3: u8, disp: i32) -> usize {
+    let disp_len = if disp == 0 && base_low3 != 0b101 {
+        0
+    } else if disp >= -128 && disp <= 127 {
+        1
+    } else {
+        4
+    };
+    let sib_len = if base_low3 == 0b100 { 1 } else { 0 };
+    1 + sib_len + disp_len // modrm + sib? + disp
+}
+
+fn encode_mem_disp(reg_field: u8, base_low3: u8, disp: i32) -> Vec<u8> {
+    let (mod_bits, disp_bytes) = if disp == 0 && base_low3 != 0b101 {
+        (0b00, Vec::new())
+    } else if disp >= -128 && disp <= 127 {
+        (0b01, vec![(disp as i8) as u8])
+    } else {
+        (0b10, disp.to_le_bytes().to_vec())
+    };
+
+    let rm = if base_low3 == 0b100 { 0b100 } else { base_low3 };
+    let mut out = Vec::new();
+    out.push(modrm(mod_bits, reg_field, rm));
+    if rm == 0b100 {
+        let sib = (0b00 << 6) | (0b100 << 3) | base_low3;
+        out.push(sib);
+    }
+    out.extend_from_slice(&disp_bytes);
+    out
+}
+
 pub fn encoded_len(instruction: &Instruction) -> usize {
     match instruction {
         Instruction::Ret => 1,
         Instruction::Syscall => 2,
         Instruction::MovRegImm64 { .. } => 10,
         Instruction::MovRegReg { .. } => 3,
+        Instruction::MovMemDispReg { base, disp, .. } => {
+            2 + mem_disp_len(base.low3(), *disp)
+        }
+        Instruction::MovRegMemDisp { base, disp, .. } => {
+            2 + mem_disp_len(base.low3(), *disp)
+        }
         Instruction::AddRegReg { .. } => 3,
         Instruction::AddRegImm32 { .. } => 7,
         Instruction::SubRegReg { .. } => 3,
@@ -56,6 +94,22 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let r = rex(true, src.ext(), false, dst.ext());
             let m = modrm(0b11, src.low3(), dst.low3()); // 0b11 means register-to-register
             vec![r, 0x89, m]
+        }
+
+        Instruction::MovMemDispReg { base, disp, src } => {
+            // Opcode 0x89 is MOV r/m64, r64
+            let r = rex(true, src.ext(), false, base.ext());
+            let mut out = vec![r, 0x89];
+            out.extend_from_slice(&encode_mem_disp(src.low3(), base.low3(), *disp));
+            out
+        }
+
+        Instruction::MovRegMemDisp { dst, base, disp } => {
+            // Opcode 0x8B is MOV r64, r/m64
+            let r = rex(true, dst.ext(), false, base.ext());
+            let mut out = vec![r, 0x8B];
+            out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
+            out
         }
         
         Instruction::AddRegReg { dst, src } => {
