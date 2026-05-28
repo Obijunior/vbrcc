@@ -1,9 +1,13 @@
 use crate::ast::*;
+use std::collections::HashMap;
 
 pub struct Codegen {
     output: String,
     data_section: String,
     string_count: usize,
+    variables: HashMap<String, i64>, // name -> rbp offset
+    stack_offset: i64, 
+    label_count: usize,
 }
 
 impl Codegen {
@@ -12,6 +16,9 @@ impl Codegen {
             output: String::new(), 
             data_section: String::new(),
             string_count: 0,
+            variables: HashMap::new(),
+            stack_offset: 0,
+            label_count: 0,
         }
     }
 
@@ -56,6 +63,9 @@ impl Codegen {
     }
 
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
+        // Reset state for each function
+        self.variables.clear();
+        self.stack_offset = 0;
 
         // make sure gcc can assemble our output by using Intel syntax and no prefixes
         self.emit("  .intel_syntax noprefix");
@@ -87,6 +97,15 @@ impl Codegen {
             }
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
+            }
+            Stmt::VarDecl { name, init } => {
+                self.stack_offset -= 8;
+                let offset = self.stack_offset;
+                self.variables.insert(name.clone(), offset);
+                if let Some(expr) = init {
+                    self.gen_expr(expr)?;
+                    self.emit(&format!("  mov [rbp - {}], rax", -offset));
+                }
             }
         }
         Ok(())
@@ -157,11 +176,53 @@ impl Codegen {
                         self.emit("  idiv rcx");
                         // quotient is left in rax automatically
                     }
+                    BinaryOp::Mod => {
+                        self.emit("  cqo");
+                        self.emit("  idiv rcx");
+                        // remainder is left in rdx
+                        self.emit("  mov rax, rdx");
+                    }
+                    BinaryOp::Eq => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  sete al"); // set low byte to 1 if equal, else 0
+                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                    }
+                    BinaryOp::Neq => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  setne al"); // set low byte to 1 if not equal, else 0
+                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                    }
+                    BinaryOp::Lt => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  setl al"); // set low byte to 1 if rax < rcx, else 0
+                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                    }
+                    BinaryOp::Lte => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  setle al");
+                        self.emit("  movzx rax, al");
+                    }
+                    BinaryOp::Gt => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  setg al");
+                        self.emit("  movzx rax, al");
+                    }
+                    BinaryOp::Gte => {
+                        self.emit("  cmp rax, rcx");
+                        self.emit("  setge al");
+                        self.emit("  movzx rax, al");
+                    }
                 }
+            }
+            Expr::Assign(name, value) => {
+                self.gen_expr(value)?;
+                let offset = *self.variables.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
+                self.emit(&format!("  mov [rbp - {}], rax", -offset));
             }
 
             Expr::Var(name) => {
-                return Err(format!("Variables not yet supported: {}", name));
+                let offset = *self.variables.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
+                self.emit(&format!("  mov rax, [rbp - {}]", -offset));
             }
         }
         Ok(())

@@ -24,6 +24,7 @@ pub enum Token {
     PlusPlus,
     MinusMinus,
     Equals,
+    NotEquals,
     PlusEquals,
     MinusEquals,
     StarEquals,

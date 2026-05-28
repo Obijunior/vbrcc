@@ -22,6 +22,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Lt,
     Lte,
     Gt,

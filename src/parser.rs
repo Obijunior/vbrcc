@@ -83,6 +83,7 @@ impl Parser {
             Token::Int => self.parse_int(),
             Token::For => self.parse_for(),
             Token::While => self.parse_while(),
+            Token::If => self.parse_if(),
             _ => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
@@ -101,7 +102,53 @@ impl Parser {
     //   4. literals, identifiers, ( expr )
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_additive()
+        self.parse_assignment()
+    }
+
+    fn parse_assignment(&mut self) -> Result<Expr, String> {
+        if let Token::Ident(name) = self.current().clone() {
+            let assign_op = match self.peek() {
+                Token::Equals => None,
+                Token::PlusEquals => Some(BinaryOp::Add),
+                Token::MinusEquals => Some(BinaryOp::Sub),
+                Token::StarEquals => Some(BinaryOp::Mul),
+                Token::SlashEquals => Some(BinaryOp::Div),
+                Token::ModuloEquals => Some(BinaryOp::Mod),
+                _ => return self.parse_comparison(),
+            };
+            self.advance(); // ident
+            self.advance(); // assignment token
+            let rhs = self.parse_expr()?;
+
+            return Ok(match assign_op {
+                None => Expr::Assign(name, Box::new(rhs)),
+                Some(op) => Expr::Assign(
+                    name.clone(),
+                    Box::new(Expr::BinaryOp(op, Box::new(Expr::Var(name.clone())), Box::new(rhs))),
+                ),
+            });
+        }
+
+        self.parse_comparison()
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+        loop {
+            let op = match self.current() {
+                Token::LessThan => BinaryOp::Lt,
+                Token::LessThanEquals => BinaryOp::Lte,
+                Token::GreaterThan => BinaryOp::Gt,
+                Token::GreaterThanEquals => BinaryOp::Gte,
+                Token::Equals => BinaryOp::Eq,
+                Token::NotEquals => BinaryOp::Neq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_additive()?;
+            left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
+        }
+        Ok(left)
     }
 
     fn parse_additive(&mut self) -> Result<Expr, String> {
@@ -170,20 +217,46 @@ impl Parser {
         Ok(Stmt::While { cond, body })
     }
 
+    fn parse_if(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'if'
+        self.expect(&Token::LParen)?;
+        let cond = self.parse_expr()?;
+        self.expect(&Token::RParen)?;
+
+        self.expect(&Token::LBrace)?;
+        let mut then_branch = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            then_branch.push(self.parse_statement()?);
+        }
+        self.expect(&Token::RBrace)?;
+        if self.current() == &Token::Else {
+            self.advance(); // consume 'else'
+            self.expect(&Token::LBrace)?;
+            let mut else_branch = Vec::new();
+            while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+                else_branch.push(self.parse_statement()?);
+            }
+            self.expect(&Token::RBrace)?;
+            Ok(Stmt::If { cond, then_branch, else_branch })
+        } else {
+            Ok(Stmt::If { cond, then_branch, else_branch: Vec::new() })
+        }
+    }
+
     fn parse_int(&mut self) -> Result<Stmt, String> {
-                self.advance(); // consume 'int'
-                let name = match self.advance().clone() {
-                    Token::Ident(s) => s,
-                    other => return Err(format!("[ ERROR ] :: Expected variable name, got {:?}", other)),
-                };
-                let init = if self.current() == &Token::Equals {
-                    self.advance(); // consume '='
-                    Some(self.parse_expr()?)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                Ok(Stmt::VarDecl { name, init })
+        self.advance(); // consume 'int'
+        let name = match self.advance().clone() {
+            Token::Ident(s) => s,
+            other => return Err(format!("[ ERROR ] :: Expected variable name, got {:?}", other)),
+        };
+        let init = if self.current() == &Token::Equals {
+            self.advance(); // consume '='
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::VarDecl { name, init })
     }
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
