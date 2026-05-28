@@ -23,6 +23,10 @@ impl Parser {
         tok
     }
 
+    fn peek(&self) -> &Token {
+        self.tokens.get(self.pos + 1).unwrap_or(&Token::EOF)
+    }
+
     // make sure next token matches what we expect.
     fn expect(&mut self, expected: &Token) -> Result<(), String> {
         let tok = self.advance();
@@ -76,6 +80,9 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Return(expr))
             }
+            Token::Int => self.parse_int(),
+            Token::For => self.parse_for(),
+            Token::While => self.parse_while(),
             _ => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
@@ -125,6 +132,58 @@ impl Parser {
             left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
         }
         Ok(left)
+    }
+
+    fn parse_for(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'for'
+        self.expect(&Token::LParen)?;
+
+        let init = Box::new(self.parse_statement()?);
+        let cond = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        let update = Box::new(self.parse_statement()?);
+
+        self.expect(&Token::RParen)?;
+
+        self.expect(&Token::LBrace)?;
+        let mut body = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            body.push(self.parse_statement()?);
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(Stmt::For { init, cond, update, body })
+    }
+
+    fn parse_while(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'while'
+        self.expect(&Token::LParen)?;
+        let cond = self.parse_expr()?;
+        self.expect(&Token::RParen)?;
+
+        self.expect(&Token::LBrace)?;
+        let mut body = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            body.push(self.parse_statement()?);
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(Stmt::While { cond, body })
+    }
+
+    fn parse_int(&mut self) -> Result<Stmt, String> {
+                self.advance(); // consume 'int'
+                let name = match self.advance().clone() {
+                    Token::Ident(s) => s,
+                    other => return Err(format!("[ ERROR ] :: Expected variable name, got {:?}", other)),
+                };
+                let init = if self.current() == &Token::Equals {
+                    self.advance(); // consume '='
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::VarDecl { name, init })
     }
 
     fn parse_unary(&mut self) -> Result<Expr, String> {

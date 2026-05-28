@@ -6,6 +6,7 @@ pub enum Expr {
     BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
     Var(String),
     FunctionCall { name: String, args: Vec<Expr> },
+    Assign(String, Box<Expr>), // name = value
 }
 
 #[derive(Debug, PartialEq)]
@@ -21,12 +22,27 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+    Neq,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
     Return(Expr),
     Expr(Expr),
+    VarDecl { name: String, init: Option<Expr> },
+    If { cond: Expr, then_branch: Vec<Stmt>, else_branch: Vec<Stmt> },
+    While { cond: Expr, body: Vec<Stmt> },
+    For { 
+        init: Box<Stmt>, // int i = 0 
+        cond: Expr, // i < x
+        update: Box<Stmt>, // i++
+        body: Vec<Stmt> // { ... }
+    },
 }
 
 #[derive(Debug, PartialEq)]

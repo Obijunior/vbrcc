@@ -11,6 +11,9 @@ pub enum Token {
     Int,
     Return,
     For,
+    While,
+    If,
+    Else,
 
     // operators
     Minus,
@@ -116,6 +119,9 @@ impl Lexer {
             "int" => Token::Int,
             "return" => Token::Return,
             "for" => Token::For,
+            "while" => Token::While,
+            "if" => Token::If,
+            "else" => Token::Else,
             _ => Token::Ident(ident),
         }
     }
