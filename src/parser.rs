@@ -107,6 +107,24 @@ impl Parser {
 
     fn parse_assignment(&mut self) -> Result<Expr, String> {
         if let Token::Ident(name) = self.current().clone() {
+            // i++ / i--
+            if *self.peek() == Token::PlusPlus {
+                self.advance(); // ident
+                self.advance(); // ++
+                return Ok(Expr::Assign(
+                    name.clone(),
+                    Box::new(Expr::BinaryOp(BinaryOp::Add, Box::new(Expr::Var(name)), Box::new(Expr::IntLiteral(1)))),
+                ));
+            }
+            if *self.peek() == Token::MinusMinus {
+                self.advance(); // ident
+                self.advance(); // --
+                return Ok(Expr::Assign(
+                    name.clone(),
+                    Box::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(Expr::Var(name)), Box::new(Expr::IntLiteral(1)))),
+                ));
+            }
+
             let assign_op = match self.peek() {
                 Token::Equals => None,
                 Token::PlusEquals => Some(BinaryOp::Add),
@@ -188,7 +206,7 @@ impl Parser {
         let init = Box::new(self.parse_statement()?);
         let cond = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        let update = Box::new(self.parse_statement()?);
+        let update = Box::new(Stmt::Expr(self.parse_expr()?));
 
         self.expect(&Token::RParen)?;
 

@@ -95,6 +95,26 @@ impl Codegen {
                 self.emit("  pop rbp");
                 self.emit("  ret");
             }
+            Stmt::For { init, cond, update, body } => {
+                let id = self.label_count;
+                self.label_count += 1;
+
+                self.gen_statement(init)?; // init
+                self.emit(&format!("loop_{}_start:", id)); // loop header label
+
+                // condition
+                self.gen_expr(cond)?;
+                self.emit("  cmp rax, 0");
+                self.emit(&format!("  je loop_{}_end", id)); // exit if condition is false
+
+                for stmt in body {
+                    self.gen_statement(stmt)?; // loop body
+                }
+                self.gen_statement(update)?; // update (e.g. i++)
+                self.emit(&format!("  jmp loop_{}_start", id)); // jump back to loop header
+                self.emit(&format!("loop_{}_end:", id)); // loop exit label
+
+            }
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
             }
@@ -105,6 +125,48 @@ impl Codegen {
                 if let Some(expr) = init {
                     self.gen_expr(expr)?;
                     self.emit(&format!("  mov [rbp - {}], rax", -offset));
+                }
+            }
+            Stmt::While { cond, body } => {
+                let id = self.label_count;
+                self.label_count += 1;
+
+                self.emit(&format!("loop_{}_start:", id));
+                self.gen_expr(cond)?;
+                self.emit("  cmp rax, 0");
+                self.emit(&format!("  je loop_{}_end", id));
+
+                for stmt in body {
+                    self.gen_statement(stmt)?;
+                }
+
+                self.emit(&format!("  jmp loop_{}_start", id));
+                self.emit(&format!("loop_{}_end:", id));
+            }
+            Stmt::If { cond, then_branch, else_branch } => {
+                let id = self.label_count;
+                self.label_count += 1;
+
+                self.gen_expr(cond)?;
+                self.emit("  cmp rax, 0");
+
+                if else_branch.is_empty() {
+                    self.emit(&format!("  je if_{}_end", id));
+                    for stmt in then_branch {
+                        self.gen_statement(stmt)?;
+                    }
+                    self.emit(&format!("if_{}_end:", id));
+                } else {
+                    self.emit(&format!("  je if_{}_else", id));
+                    for stmt in then_branch {
+                        self.gen_statement(stmt)?;
+                    }
+                    self.emit(&format!("  jmp if_{}_end", id));
+                    self.emit(&format!("if_{}_else:", id));
+                    for stmt in else_branch {
+                        self.gen_statement(stmt)?;
+                    }
+                    self.emit(&format!("if_{}_end:", id));
                 }
             }
         }
