@@ -10,6 +10,22 @@ pub enum Token {
     // keywords
     Int,
     Return,
+    For,
+
+    // operators
+    Minus,
+    Plus,
+    Star,
+    Slash,
+    Modulo,
+    PlusPlus,
+    MinusMinus,
+    Equals,
+    PlusEquals,
+    MinusEquals,
+    StarEquals,
+    SlashEquals,
+    ModuloEquals,
 
     // symbols
     LParen,
@@ -17,15 +33,14 @@ pub enum Token {
     LBrace,
     RBrace,
     Semicolon,
-    Minus,
-    Plus,
-    Star,
-    Slash,
     Bang,
     Tilde,
-    Equals,
     Comma,
     Colon,
+    LessThan,
+    LessThanEquals,
+    GreaterThan,
+    GreaterThanEquals,
 
     EOF,
 }
@@ -100,6 +115,7 @@ impl Lexer {
         match ident.as_str() {
             "int" => Token::Int,
             "return" => Token::Return,
+            "for" => Token::For,
             _ => Token::Ident(ident),
         }
     }
@@ -116,14 +132,61 @@ impl Lexer {
             Some('}') => { self.advance(); Token::RBrace },
             Some(';') => { self.advance(); Token::Semicolon },
             Some(',') => { self.advance(); Token::Comma },
-            Some('-') => { self.advance(); Token::Minus },
-            Some('+') => { self.advance(); Token::Plus },
-            Some('*') => { self.advance(); Token::Star },
-            Some('/') => { self.advance(); Token::Slash },
+            Some('-') => { 
+                self.advance();
+                match self.current() {
+                    Some('-') => { self.advance(); Token::MinusMinus },
+                    Some('=') => { self.advance(); Token::MinusEquals },
+                    _ => Token::Minus,
+                } 
+            },
+            Some('+') => { 
+                self.advance(); // consume first '+', so we can check for '++' or '+='
+                match self.current() {
+                    Some('+') => { self.advance(); Token::PlusPlus },
+                    Some('=') => { self.advance(); Token::PlusEquals },
+                    _ => Token::Plus,
+                }
+            },
+            Some('*') => { 
+                self.advance();
+                match self.current() {
+                    Some('=') => { self.advance(); Token::StarEquals },
+                    _ => Token::Star,
+                } 
+            },
+            Some('/') => { 
+                self.advance(); 
+                match self.current() {
+                    Some('=') => { self.advance(); Token::SlashEquals },
+                    _ => Token::Slash,
+                }
+            },
+            Some('%') => { 
+                self.advance(); 
+                match self.current() {
+                    Some('=') => { self.advance(); Token::ModuloEquals },
+                    _ => Token::Modulo,
+                }
+            },
             Some('!') => { self.advance(); Token::Bang },
             Some('~') => { self.advance(); Token::Tilde },
             Some('=') => { self.advance(); Token::Equals },
             Some(':') => { self.advance(); Token::Colon },
+            Some('<') => { 
+                self.advance();
+                match self.current() {
+                    Some('=') => { self.advance(); Token::LessThanEquals },
+                    _ => Token::LessThan,
+                } 
+            },
+            Some('>') => { 
+                self.advance(); 
+                match self.current() {
+                    Some('=') => { self.advance(); Token::GreaterThanEquals },
+                    _ => Token::GreaterThan,
+                }
+            },
             None => Token::EOF,
             other => panic!("Unexpected character: {:?}", other),
         }
