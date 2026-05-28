@@ -329,4 +329,71 @@ mod tests {
         let asm = compile("int main() { return 10 / 2; }");
         assert!(asm.contains("idiv rcx"));
     }
+
+    #[test]
+    fn test_var_decl_and_return() {
+        let asm = compile("int main() { int x = 5; return x; }");
+        assert!(asm.contains("mov rax, 5"));
+        assert!(asm.contains("mov [rbp - 8], rax"));
+        assert!(asm.contains("mov rax, [rbp - 8]"));
+        assert!(asm.contains("ret"));
+    }
+
+    #[test]
+    fn test_assignment() {
+        let asm = compile("int main() { int x = 1; x = 2; return x; }");
+        assert!(asm.contains("mov rax, 1"));
+        assert!(asm.contains("mov rax, 2"));
+        assert!(asm.contains("ret"));
+    }
+
+    #[test]
+    fn test_less_than_comparison() {
+        let asm = compile("int main() { return 1 < 2; }");
+        assert!(asm.contains("cmp rax, rcx"));
+        assert!(asm.contains("setl al"));
+        assert!(asm.contains("movzx rax, al"));
+    }
+
+    #[test]
+    fn test_for_loop_generates_labels_and_jumps() {
+        let asm = compile("int main() { int s = 0; for (int i = 0; i < 10; i++) { s += i; } return s; }");
+        assert!(asm.contains("loop_0_start:"));
+        assert!(asm.contains("je loop_0_end"));
+        assert!(asm.contains("jmp loop_0_start"));
+        assert!(asm.contains("loop_0_end:"));
+    }
+
+    #[test]
+    fn test_while_loop_generates_labels_and_jumps() {
+        let asm = compile("int main() { int i = 0; while (i < 5) { i++; } return i; }");
+        assert!(asm.contains("loop_0_start:"));
+        assert!(asm.contains("je loop_0_end"));
+        assert!(asm.contains("jmp loop_0_start"));
+        assert!(asm.contains("loop_0_end:"));
+    }
+
+    #[test]
+    fn test_if_without_else() {
+        let asm = compile("int main() { int x = 0; if (x < 1) { x = 1; } return x; }");
+        assert!(asm.contains("je if_0_end"));
+        assert!(asm.contains("if_0_end:"));
+        assert!(!asm.contains("if_0_else:"));
+    }
+
+    #[test]
+    fn test_if_with_else() {
+        let asm = compile("int main() { int x = 0; if (x < 1) { x = 1; } else { x = 2; } return x; }");
+        assert!(asm.contains("je if_0_else"));
+        assert!(asm.contains("jmp if_0_end"));
+        assert!(asm.contains("if_0_else:"));
+        assert!(asm.contains("if_0_end:"));
+    }
+
+    #[test]
+    fn test_modulo() {
+        let asm = compile("int main() { return 10 % 3; }");
+        assert!(asm.contains("idiv rcx"));
+        assert!(asm.contains("mov rax, rdx"));
+    }
 }

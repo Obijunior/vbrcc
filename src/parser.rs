@@ -188,9 +188,10 @@ impl Parser {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.current() {
-                Token::Star  => BinaryOp::Mul,
-                Token::Slash => BinaryOp::Div,
-                _            => break,
+                Token::Star   => BinaryOp::Mul,
+                Token::Slash  => BinaryOp::Div,
+                Token::Modulo => BinaryOp::Mod,
+                _             => break,
             };
             self.advance();
             let right = self.parse_unary()?;
@@ -364,5 +365,113 @@ mod tests {
         let mut parser = Parser::new(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
         let stmt = parser.parse_statement().unwrap();
         assert_eq!(stmt, Stmt::Expr(Expr::IntLiteral(7)));
+    }
+
+    #[test]
+    fn parse_var_decl_with_init() {
+        // int x = 5;
+        let mut parser = Parser::new(vec![
+            Token::Int, Token::Ident("x".into()), Token::Equals,
+            Token::IntLiteral(5), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::VarDecl {
+            name: "x".into(),
+            init: Some(Expr::IntLiteral(5)),
+        });
+    }
+
+    #[test]
+    fn parse_var_decl_without_init() {
+        // int x;
+        let mut parser = Parser::new(vec![
+            Token::Int, Token::Ident("x".into()), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::VarDecl {
+            name: "x".into(),
+            init: None,
+        });
+    }
+
+    #[test]
+    fn parse_assignment() {
+        // x = 10;
+        let mut parser = Parser::new(vec![
+            Token::Ident("x".into()), Token::Equals,
+            Token::IntLiteral(10), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::Expr(Expr::Assign("x".into(), Box::new(Expr::IntLiteral(10)))));
+    }
+
+    #[test]
+    fn parse_compound_assignment() {
+        // x += 3;
+        let mut parser = Parser::new(vec![
+            Token::Ident("x".into()), Token::PlusEquals,
+            Token::IntLiteral(3), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::Expr(Expr::Assign(
+            "x".into(),
+            Box::new(Expr::BinaryOp(
+                BinaryOp::Add,
+                Box::new(Expr::Var("x".into())),
+                Box::new(Expr::IntLiteral(3)),
+            )),
+        )));
+    }
+
+    #[test]
+    fn parse_post_increment() {
+        // i++;
+        let mut parser = Parser::new(vec![
+            Token::Ident("i".into()), Token::PlusPlus, Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = parser.parse_statement().unwrap();
+        assert_eq!(stmt, Stmt::Expr(Expr::Assign(
+            "i".into(),
+            Box::new(Expr::BinaryOp(
+                BinaryOp::Add,
+                Box::new(Expr::Var("i".into())),
+                Box::new(Expr::IntLiteral(1)),
+            )),
+        )));
+    }
+
+    #[test]
+    fn parse_comparison_less_than() {
+        // i < 10 (as an expression)
+        let mut parser = Parser::new(vec![
+            Token::Ident("i".into()), Token::LessThan,
+            Token::IntLiteral(10), Token::EOF,
+        ]);
+        let expr = parser.parse_expr().unwrap();
+        assert_eq!(expr, Expr::BinaryOp(
+            BinaryOp::Lt,
+            Box::new(Expr::Var("i".into())),
+            Box::new(Expr::IntLiteral(10)),
+        ));
+    }
+
+    #[test]
+    fn parse_comparison_binds_looser_than_additive() {
+        // i < 3 + 1 should parse as i < (3 + 1)
+        let mut parser = Parser::new(vec![
+            Token::Ident("i".into()), Token::LessThan,
+            Token::IntLiteral(3), Token::Plus, Token::IntLiteral(1),
+            Token::EOF,
+        ]);
+        let expr = parser.parse_expr().unwrap();
+        assert_eq!(expr, Expr::BinaryOp(
+            BinaryOp::Lt,
+            Box::new(Expr::Var("i".into())),
+            Box::new(Expr::BinaryOp(
+                BinaryOp::Add,
+                Box::new(Expr::IntLiteral(3)),
+                Box::new(Expr::IntLiteral(1)),
+            )),
+        ));
     }
 }

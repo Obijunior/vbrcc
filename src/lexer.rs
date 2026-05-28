@@ -176,9 +176,21 @@ impl Lexer {
                     _ => Token::Modulo,
                 }
             },
-            Some('!') => { self.advance(); Token::Bang },
+            Some('!') => { 
+                self.advance();
+                match self.current() {
+                    Some('=') => { self.advance(); Token::NotEquals },
+                    _ => Token::Bang,
+                } 
+            },
             Some('~') => { self.advance(); Token::Tilde },
-            Some('=') => { self.advance(); Token::Equals },
+            Some('=') => { 
+                self.advance(); 
+                match self.current() {
+                    Some('=') => { self.advance(); Token::Equals },
+                    _ => Token::Equals, // single '=' is for assignment, but we'll handle that in the parser
+                } 
+            },
             Some(':') => { self.advance(); Token::Colon },
             Some('<') => { 
                 self.advance();
@@ -221,7 +233,7 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;  // pulls in everything from the parent module
+    use super::*;
 
     #[test]
     fn test_single_number() {
@@ -238,6 +250,18 @@ mod tests {
         assert_eq!(lexer.tokenize(), vec![
             Token::Int,
             Token::Return,
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_control_flow_keywords() {
+        let mut lexer = Lexer::new("for while if else");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::For,
+            Token::While,
+            Token::If,
+            Token::Else,
             Token::EOF,
         ]);
     }
@@ -267,8 +291,78 @@ mod tests {
     fn test_ident_vs_keyword() {
         let mut lexer = Lexer::new("integer int");
         assert_eq!(lexer.tokenize(), vec![
-            Token::Ident("integer".to_string()),  // not a keyword
-            Token::Int,                            // is a keyword
+            Token::Ident("integer".to_string()),
+            Token::Int,
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_increment_decrement() {
+        let mut lexer = Lexer::new("i++ j--");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::Ident("i".to_string()),
+            Token::PlusPlus,
+            Token::Ident("j".to_string()),
+            Token::MinusMinus,
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_compound_assignment() {
+        let mut lexer = Lexer::new("+= -= *= /= %=");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::PlusEquals,
+            Token::MinusEquals,
+            Token::StarEquals,
+            Token::SlashEquals,
+            Token::ModuloEquals,
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_comparison_operators() {
+        let mut lexer = Lexer::new("< <= > >=");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::LessThan,
+            Token::LessThanEquals,
+            Token::GreaterThan,
+            Token::GreaterThanEquals,
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_plus_not_confused_with_plus_plus() {
+        let mut lexer = Lexer::new("a + b");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::Ident("a".to_string()),
+            Token::Plus,
+            Token::Ident("b".to_string()),
+            Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn test_for_loop_tokens() {
+        let mut lexer = Lexer::new("for (int i = 0; i < 10; i++)");
+        assert_eq!(lexer.tokenize(), vec![
+            Token::For,
+            Token::LParen,
+            Token::Int,
+            Token::Ident("i".to_string()),
+            Token::Equals,
+            Token::IntLiteral(0),
+            Token::Semicolon,
+            Token::Ident("i".to_string()),
+            Token::LessThan,
+            Token::IntLiteral(10),
+            Token::Semicolon,
+            Token::Ident("i".to_string()),
+            Token::PlusPlus,
+            Token::RParen,
             Token::EOF,
         ]);
     }
