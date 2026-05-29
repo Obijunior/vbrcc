@@ -45,15 +45,8 @@ fn encode_mem_disp(reg_field: u8, base_low3: u8, disp: i32) -> Vec<u8> {
 pub fn encoded_len(instruction: &Instruction) -> usize {
     match instruction {
         Instruction::Ret => 1,
+        Instruction::Cqo => 2,
         Instruction::Syscall => 2,
-        Instruction::MovRegImm64 { .. } => 10,
-        Instruction::MovRegReg { .. } => 3,
-        Instruction::MovMemDispReg { base, disp, .. } => {
-            2 + mem_disp_len(base.low3(), *disp)
-        }
-        Instruction::MovRegMemDisp { base, disp, .. } => {
-            2 + mem_disp_len(base.low3(), *disp)
-        }
         Instruction::AddRegReg { .. } => 3,
         Instruction::AddRegImm32 { .. } => 7,
         Instruction::SubRegReg { .. } => 3,
@@ -70,6 +63,14 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::NotReg { .. } => 3,
         Instruction::LeaRegLabel { .. } => 7,
         Instruction::CallLabel { .. } => 5,
+        Instruction::MovRegImm64 { .. } => 10,
+        Instruction::MovRegReg { .. } => 3,
+        Instruction::MovMemDispReg { base, disp, .. } => {
+            2 + mem_disp_len(base.low3(), *disp)
+        }
+        Instruction::MovRegMemDisp { base, disp, .. } => {
+            2 + mem_disp_len(base.low3(), *disp)
+        }
     }
 }
 
@@ -85,6 +86,7 @@ pub fn encoded_len_with_labels(instruction: &Instruction, label_set: &HashSet<St
 pub fn encode(instruction: &Instruction) -> Vec<u8> {
     match instruction {
         Instruction::Ret => vec![0xC3],
+        Instruction::Cqo => vec![0x48, 0x99],
         Instruction::Syscall => vec![0x0F, 0x05],
     
         Instruction::MovRegImm64 { dst, imm } => {

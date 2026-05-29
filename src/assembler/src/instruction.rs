@@ -11,6 +11,7 @@ pub enum AsmLine {
 #[derive(Debug)]
 pub enum Instruction {
     Ret,
+    Cqo,
     Syscall,
     MovRegImm64 { dst: Register64, imm: i64 },
     MovRegReg { dst: Register64, src: Register64 },
@@ -191,6 +192,12 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 return Err(format!("[ ERROR ] :: ret should have no operands: {}", raw));
             }
             Ok(AsmLine::Instruction(Instruction::Ret))
+        }
+        "cqo" => {
+            if !operands.is_empty() {
+                return Err(format!("[ ERROR ] :: cqo should have no operands: {}", raw));
+            }
+            Ok(AsmLine::Instruction(Instruction::Cqo))
         }
         "syscall" => {
             Ok(AsmLine::Instruction(Instruction::Syscall))
