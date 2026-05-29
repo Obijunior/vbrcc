@@ -31,6 +31,7 @@ pub enum Instruction {
     PopReg { reg: Register64 },
     NegReg { reg: Register64 },
     NotReg { reg: Register64 },
+    IdivReg { reg: Register64 },
     LeaRegLabel { dst: Register64, label: String },
     CallLabel { label: String },
 }
@@ -221,6 +222,11 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             let reg = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid register in not: {}", raw))?;
             Ok(AsmLine::Instruction(Instruction::NotReg { reg }))
+        }
+        "idiv" => {
+            let reg = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid register in idiv: {}", raw))?;
+            Ok(AsmLine::Instruction(Instruction::IdivReg { reg }))
         }
         "mov" => {
             if operands.len() != 2 {

@@ -61,6 +61,7 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::PopReg { reg } => if reg.ext() { 2 } else { 1 },
         Instruction::NegReg { .. } => 3,
         Instruction::NotReg { .. } => 3,
+        Instruction::IdivReg { .. } => 3,
         Instruction::LeaRegLabel { .. } => 7,
         Instruction::CallLabel { .. } => 5,
         Instruction::MovRegImm64 { .. } => 10,
@@ -221,6 +222,12 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
         Instruction::NotReg { reg } => {
             let r = rex(true, false, false, reg.ext());
             let m = modrm(0b11, 0b010, reg.low3()); // /2 in reg field
+            vec![r, 0xF7, m]
+        }
+
+        Instruction::IdivReg { reg } => {
+            let r = rex(true, false, false, reg.ext());
+            let m = modrm(0b11, 0b111, reg.low3()); // /7 in reg field
             vec![r, 0xF7, m]
         }
 

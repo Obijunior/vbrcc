@@ -64,7 +64,56 @@ fn test_assemble_with_gcc() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// Test 3: Full pipeline: run the main crate to compile a tiny C program to a binary.
+// Test 3: Assembler handles arithmetic and comparison instructions
+#[test]
+fn test_assembler_arithmetic_instructions() -> Result<(), Box<dyn std::error::Error>> {
+    let asm = r#".intel_syntax noprefix
+.globl main
+main:
+  push rbp
+  mov rbp, rsp
+  mov rax, 10
+  mov rcx, 3
+  cmp rax, rcx
+  cmp rax, 0
+  neg rax
+  not rcx
+  cqo
+  idiv rcx
+  imul rax, rcx
+  add rax, 5
+  sub rax, 2
+  pop rbp
+  ret
+"#;
+    let mut asm_path = std::env::temp_dir();
+    asm_path.push("test_asm_arithmetic.s");
+    let mut out_obj = std::env::temp_dir();
+    out_obj.push("test_asm_arithmetic.o");
+
+    File::create(&asm_path)?.write_all(asm.as_bytes())?;
+
+    let status = Command::new("cargo")
+        .args(&[
+            "run",
+            "--manifest-path",
+            "src/assembler/Cargo.toml",
+            "--",
+            asm_path.to_str().unwrap(),
+            out_obj.to_str().unwrap(),
+        ])
+        .status()?;
+
+    if !status.success() {
+        return Err(format!("assembler failed on arithmetic instructions: {}", status).into());
+    }
+
+    let meta = fs::metadata(&out_obj)?;
+    assert!(meta.len() > 0, "object file should be non-empty");
+    Ok(())
+}
+
+// Test 4: Full pipeline: run the main crate to compile a tiny C program to a binary.
 #[test]
 fn test_full_pipeline_c_to_executable() -> Result<(), Box<dyn std::error::Error>> {
     let c_src = r#"int main() { return 42; }"#;
