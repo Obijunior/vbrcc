@@ -58,11 +58,15 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::AddRegImm32 { .. } => 7,
         Instruction::SubRegReg { .. } => 3,
         Instruction::SubRegImm32 { .. } => 7,
+        Instruction::CmpRegReg { .. } => 3,
+        Instruction::CmpRegImm32 { .. } => 7,
         Instruction::AndRegReg { .. } => 3,
         Instruction::AndRegImm32 { .. } => 7,
         Instruction::ImulRegReg { .. } => 4,
         Instruction::PushReg { reg } => if reg.ext() { 2 } else { 1 },
         Instruction::PopReg { reg } => if reg.ext() { 2 } else { 1 },
+        Instruction::NegReg { .. } => 3,
+        Instruction::NotReg { .. } => 3,
         Instruction::LeaRegLabel { .. } => 7,
         Instruction::CallLabel { .. } => 5,
     }
@@ -144,6 +148,20 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             out
         }
 
+        Instruction::CmpRegReg { dst, src } => {
+            let r = rex(true, src.ext(), false, dst.ext());
+            let m = modrm(0b11, src.low3(), dst.low3());
+            vec![r, 0x39, m]
+        }
+
+        Instruction::CmpRegImm32 { dst, imm } => {
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b111, dst.low3());
+            let mut out = vec![r, 0x81, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
+        }
+
         Instruction::AndRegReg { dst, src } => {
             // Opcode 0x21 is AND r/m64, r64
             let r = rex(true, src.ext(), false, dst.ext());
@@ -181,6 +199,18 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             } else {
                 vec![0x58 + reg.low3()]
             }
+        }
+
+        Instruction::NegReg { reg } => {
+            let r = rex(true, false, false, reg.ext());
+            let m = modrm(0b11, 0b011, reg.low3()); // /3 in reg field
+            vec![r, 0xF7, m]
+        }
+
+        Instruction::NotReg { reg } => {
+            let r = rex(true, false, false, reg.ext());
+            let m = modrm(0b11, 0b010, reg.low3()); // /2 in reg field
+            vec![r, 0xF7, m]
         }
 
         Instruction::LeaRegLabel { .. } | Instruction::CallLabel { .. } => {
