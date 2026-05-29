@@ -63,6 +63,7 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::AndRegReg { .. } => 3,
         Instruction::AndRegImm32 { .. } => 7,
         Instruction::ImulRegReg { .. } => 4,
+        Instruction::ImulRegImm32 { .. } => 7,
         Instruction::PushReg { reg } => if reg.ext() { 2 } else { 1 },
         Instruction::PopReg { reg } => if reg.ext() { 2 } else { 1 },
         Instruction::NegReg { .. } => 3,
@@ -183,6 +184,14 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let r = rex(true, dst.ext(), false, src.ext());
             let m = modrm(0b11, dst.low3(), src.low3());
             vec![r, 0x0F, 0xAF, m]
+        }
+
+        Instruction::ImulRegImm32 { dst, imm } => {
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, dst.low3(), dst.low3()); // Opcode 0x69 is IMUL r64, r/m64, imm32
+            let mut out = vec![r, 0x69, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
         }
         
         Instruction::PushReg { reg } => {

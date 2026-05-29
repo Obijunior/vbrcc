@@ -20,9 +20,10 @@ pub enum Instruction {
     AddRegImm32 { dst: Register64, imm: i32 },
     SubRegReg { dst: Register64, src: Register64 },
     SubRegImm32 { dst: Register64, imm: i32 },
+    ImulRegReg { dst: Register64, src: Register64 },
+    ImulRegImm32 { dst: Register64, imm: i32 },
     AndRegReg { dst: Register64, src: Register64 },
     AndRegImm32 { dst: Register64, imm: i32 },
-    ImulRegReg { dst: Register64, src: Register64 },
     CmpRegReg { dst: Register64, src: Register64 },
     CmpRegImm32 { dst: Register64, imm: i32 },
     PushReg { reg: Register64 },
@@ -244,7 +245,7 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 Ok(AsmLine::Instruction(Instruction::MovRegReg { dst, src }))
             }
         }
-        "add" | "sub" | "and" | "cmp" => {
+        "add" | "sub" | "and" | "cmp" | "imul" => {
             let (dst, src) = parse_reg_regimm(&operands, raw)?;
             let instr = match (opcode.to_ascii_lowercase().as_str(), src) {
                 ("add", RegOrImm::Reg(src)) => Instruction::AddRegReg { dst, src },
@@ -255,6 +256,8 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 ("and", RegOrImm::Imm(imm)) => Instruction::AndRegImm32 { dst, imm },
                 ("cmp", RegOrImm::Reg(src)) => Instruction::CmpRegReg { dst, src },
                 ("cmp", RegOrImm::Imm(imm)) => Instruction::CmpRegImm32 { dst, imm },
+                ("imul", RegOrImm::Reg(src)) => Instruction::ImulRegReg { dst, src },
+                ("imul", RegOrImm::Imm(imm)) => Instruction::ImulRegImm32 { dst, imm },
                 _ => unreachable!(),
             };
             Ok(AsmLine::Instruction(instr))
