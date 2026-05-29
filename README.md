@@ -69,12 +69,15 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 - Syntax: Intel syntax (the assembler accepts `.intel_syntax noprefix`).
 - Registers: all 64-bit general-purpose registers are recognised (RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, R8-R15).
 - Supported instructions (textual forms accepted by the assembler):
-  - `ret`
-  - `push <reg>`
-  - `pop <reg>`
-  - `mov <reg>, <reg>` and `mov <reg>, <imm>` (imm is a 64-bit integer)
-  - `add <reg>, <reg>`
-  - `sub <reg>, <reg>`
+  - `ret`, `syscall`, `cqo`
+  - `push <reg>`, `pop <reg>`
+  - `neg <reg>`, `not <reg>`, `idiv <reg>`
+  - `mov <reg>, <reg>` / `mov <reg>, <imm64>` / `mov <reg>, [reg +/- disp]` / `mov [reg +/- disp], <reg>`
+  - `add <reg>, <reg|imm32>`, `sub <reg>, <reg|imm32>`
+  - `imul <reg>, <reg|imm32>`
+  - `and <reg>, <reg|imm32>`, `cmp <reg>, <reg|imm32>`
+  - `lea <reg>, [rip + label]`
+  - `call <label>`
 
 ### Fun side notes
 
@@ -83,15 +86,14 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 
 ### Notes and limitations
 
-- The assembler currently encodes instructions into raw machine bytes and writes them to the output file. It does not emit a full object file format (ELF/COFF). Because of that, passing the produced file directly to `gcc` as an object file will usually fail. The project contains an `assembler_driver` that attempts to run the assembler and then call `gcc` to link; that driver is a work-in-progress and may require changes to produce linkable object files.
-- Labels, relocations and multi-section object support are not implemented yet — those are planned enhancements.
-- The assembler code includes an encoder for `imul`, but the textual parser does not accept `imul` at the moment.
-- Programs using control flow (loops, conditionals) must be compiled with `--gcc` until the custom assembler gains label and jump support.
+- The assembler encodes instructions into raw machine bytes and produces Windows PE executables. It handles labels within `.text` and `.data` sections, as well as external function calls via IAT.
+- Jump instructions (`jmp`, `je`, `jne`, etc.) and `setcc`/`movzx` are not yet supported in the custom assembler — programs using control flow (loops, conditionals) must be compiled with `--gcc` until those are added.
+- No ELF output — currently Windows PE only.
 
 ## Contributing / next steps
 
-- Emit proper ELF64/COFF object files from the custom assembler (biggest gap — needed for clean `gcc` linking).
-- Add labels, relocations, and jump instructions to the assembler.
-- Add more instructions and addressing modes to the assembler (`cmp`, `setcc`, memory operands `[reg + disp]`, etc.).
+- Add jump instructions (`jmp`, `je`, `jne`, `jl`, `jge`, etc.) with label resolution (two-pass: collect label offsets, patch displacements).
+- Add `setcc` variants (`sete`, `setne`, `setl`, `setle`, `setg`, `setge`) and `movzx` — unblocks comparisons without `--gcc`.
+- Emit ELF64 output (currently Windows PE only).
 - Extend the C frontend: function parameters, multiple types, `break`/`continue`, `switch`.
 - Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).
