@@ -377,6 +377,16 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             };
             Ok(AsmLine::Instruction(instr))
         }
+        "movzx" => {
+            if operands.len() != 2 {
+                return Err(format!("[ ERROR ] :: movzx expects 2 operands: {}", raw));
+            }
+            let dst = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+            let src = parse_register8(operands[1])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
+            Ok(AsmLine::Instruction(Instruction::MovzxReg64Reg8 { dst, src }))
+        }
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
     }
 }
