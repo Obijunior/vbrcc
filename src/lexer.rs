@@ -166,6 +166,13 @@ impl Lexer {
                 self.advance(); 
                 match self.current() {
                     Some('=') => { self.advance(); Token::SlashEquals },
+                    Some('/') => { 
+                        // skip single-line comment
+                        while self.current() != Some('\n') && self.current().is_some() {
+                            self.advance();
+                        }
+                        return self.next_token(); // get the next token after the comment
+                    },
                     _ => Token::Slash,
                 }
             },

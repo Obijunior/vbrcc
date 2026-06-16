@@ -79,10 +79,12 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
   - `lea <reg>, [rip + label]`
   - `call <label>`
 
-### Fun side notes
+### Fun tests you can run
 
-- if you run `objdump -d -M intel <output file>` you can see the disassembled assembly contained in the executable. Doing a comparison between the output from my assembler and from when the --gcc flag is passed produces some pretty interesting results
-- running `hexdump -v -e '1/1 "%02x "' <output file>` will give the raw hex from the executable in a big chunk
+- if you run `objdump -d -M intel <executable file>` you can see the disassembled assembly contained in the executable. Doing a comparison between the output from my assembler and from when the --gcc flag is passed produces some pretty interesting results
+- running `hexdump -v -e '1/1 "%02x "' <executable file>` will give the raw hex from the executable in a big chunk
+- running `gcc -S -masm=intel <c code>` will show you how `gcc` compiles the inputted c code 
+- Similar: `gcc -S -masm=intel -O0 -fno-asynchronous-unwind-tables -fno-ident input.c` but without optimizations or the `.seh_*` directives
 
 ### Notes and limitations
 
