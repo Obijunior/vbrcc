@@ -43,6 +43,7 @@ cargo test
 | Compound assignment | `+=`, `-=`, `*=`, `/=`, `%=` |
 | Post-increment/decrement | `i++`, `i--` |
 | Function calls | `printf("hello")` |
+| Single line comment | `// this is a comment` |
 
 ### Statements and control flow
 

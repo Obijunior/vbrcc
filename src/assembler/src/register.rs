@@ -16,3 +16,17 @@ impl Register64 {
     pub fn low3(self) -> u8 { self.id() & 0b111 }
     pub fn ext(self) -> bool { self.id() >= 8 }
 }
+
+pub enum Register8 {
+    Al, Bl, Cl, Dl,
+}
+
+impl Register8 {
+    fn id(self) -> u8 {
+        match self {
+            Self::Al => 0, Self::Cl => 1, Self::Dl => 2, Self::Bl => 3,
+        }
+    }
+    pub fn low3(self) -> u8 { self.id() & 0b111 }
+    pub fn ext(self) -> bool { false }
+}
