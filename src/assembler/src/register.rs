@@ -17,6 +17,7 @@ impl Register64 {
     pub fn ext(self) -> bool { self.id() >= 8 }
 }
 
+#[derive(Debug, Clone Copy)]
 pub enum Register8 {
     Al, Bl, Cl, Dl,
 }

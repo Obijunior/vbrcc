@@ -1,4 +1,4 @@
-use crate::register::Register64;
+use crate::register::{Register64, Register8};
 
 pub enum AsmLine {
     Instruction(Instruction),
@@ -13,27 +13,49 @@ pub enum Instruction {
     Ret,
     Cqo,
     Syscall,
+
     MovRegImm64 { dst: Register64, imm: i64 },
     MovRegReg { dst: Register64, src: Register64 },
     MovMemDispReg { base: Register64, disp: i32, src: Register64 },
     MovRegMemDisp { dst: Register64, base: Register64, disp: i32 },
+    MovzxReg64Reg8 { dst: Register64, src: Register8 },
+
     AddRegReg { dst: Register64, src: Register64 },
     AddRegImm32 { dst: Register64, imm: i32 },
     SubRegReg { dst: Register64, src: Register64 },
     SubRegImm32 { dst: Register64, imm: i32 },
     ImulRegReg { dst: Register64, src: Register64 },
     ImulRegImm32 { dst: Register64, imm: i32 },
+    IdivReg { reg: Register64 },
+
     AndRegReg { dst: Register64, src: Register64 },
     AndRegImm32 { dst: Register64, imm: i32 },
     CmpRegReg { dst: Register64, src: Register64 },
     CmpRegImm32 { dst: Register64, imm: i32 },
-    PushReg { reg: Register64 },
-    PopReg { reg: Register64 },
     NegReg { reg: Register64 },
     NotReg { reg: Register64 },
-    IdivReg { reg: Register64 },
+
+    PushReg { reg: Register64 },
+    PopReg { reg: Register64 },
+
     LeaRegLabel { dst: Register64, label: String },
     CallLabel { label: String },
+
+    SeteReg8 { reg: Register8 },
+    SetlReg8 { reg: Register8 },
+    SetgReg8 { reg: Register8 },
+    SetneReg8 { reg: Register8 },
+    SetleReg8 { reg: Register8 },
+    SetgeReg8 { reg: Register8 },
+
+
+    JmpLabel { label: String },
+    JeLabel { label: String },
+    JneLabel { label: String },
+    JlLabel { label: String },
+    JleLabel { label: String },
+    JgLabel { label: String },
+    JgeLabel { label: String },
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -57,6 +79,16 @@ fn parse_register64(s: &str) -> Option<Register64> {
         "r10" => Some(Register64::R10), "r11" => Some(Register64::R11),
         "r12" => Some(Register64::R12), "r13" => Some(Register64::R13),
         "r14" => Some(Register64::R14), "r15" => Some(Register64::R15),
+        _ => None,
+    }
+}
+
+fn parse_register8(s: &str) -> Option<Register8> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "al" => Some(Register8::Al),
+        "bl" => Some(Register8::Bl),
+        "cl" => Some(Register8::Cl),
+        "dl" => Some(Register8::Dl),
         _ => None,
     }
 }
@@ -307,6 +339,43 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 return Err(format!("[ ERROR ] :: call target is empty: {}", raw));
             }
             Ok(AsmLine::Instruction(Instruction::CallLabel { label }))
+        }
+        "je" | "jne" | "jl" | "jle" | "jg" | "jge" | "jmp" => {
+            if operands.len() != 1 {
+                return Err(format!("[ ERROR ] :: {} expects 1 operand: {}", opcode, raw));
+            }
+            let label = operands[0].trim().to_string();
+            if label.is_empty() {
+                return Err(format!("[ ERROR ] :: {} target is empty: {}", opcode, raw));
+            }
+            let instr = match opcode.to_ascii_lowercase().as_str() {
+                "je" => Instruction::JeLabel { label },
+                "jne" => Instruction::JneLabel { label },
+                "jl" => Instruction::JlLabel { label },
+                "jle" => Instruction::JleLabel { label },
+                "jg" => Instruction::JgLabel { label },
+                "jge" => Instruction::JgeLabel { label },
+                "jmp" => Instruction::JmpLabel { label },
+                _ => unreachable!(),
+            };
+            Ok(AsmLine::Instruction(instr))
+        }
+        "sete" | "setl" | "setg" | "setne" | "setle" | "setge" => {
+            if operands.len() != 1 {
+                return Err(format!("[ ERROR ] :: {} expects 1 operand: {}", opcode, raw));
+            }
+            let reg = parse_register8(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid register in {}: {}", opcode, raw))?;
+            let instr = match opcode.to_ascii_lowercase().as_str() {
+                "sete" => Instruction::SeteReg8 { reg },
+                "setl" => Instruction::SetlReg8 { reg },
+                "setg" => Instruction::SetgReg8 { reg },
+                "setne" => Instruction::SetneReg8 { reg },
+                "setle" => Instruction::SetleReg8 { reg },
+                "setge" => Instruction::SetgeReg8 { reg },
+                _ => unreachable!(),
+            };
+            Ok(AsmLine::Instruction(instr))
         }
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
     }
