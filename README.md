@@ -11,7 +11,7 @@ cargo run -- <input.c> [-o <output_file>] [--gcc]
 ```
 
 - Default behavior: uses the custom assembler (Intel x86-64 syntax), while still using `gcc` as a linker.
-- Pass `--gcc` to use the system `gcc` to assemble and link instead. Required for programs that use control flow (for, while, if/else), since the custom assembler does not yet support labels and jumps.
+- Pass `--gcc` to use the system `gcc` to assemble and link instead.
 
 ## Tests
 
@@ -68,15 +68,18 @@ cargo test
 The custom assembler (subcrate `src/assembler`) supports a small subset of Intel x86-64 instructions and registers:
 
 - Syntax: Intel syntax (the assembler accepts `.intel_syntax noprefix`).
-- Registers: all 64-bit general-purpose registers are recognised (RAX, RBX, RCX, RDX, RSI, RDI, RBP, RSP, R8-R15).
+- Registers: all 64-bit general-purpose registers (RAX–R15) and 8-bit sub-registers (AL, BL, CL, DL).
 - Supported instructions (textual forms accepted by the assembler):
   - `ret`, `syscall`, `cqo`
   - `push <reg>`, `pop <reg>`
   - `neg <reg>`, `not <reg>`, `idiv <reg>`
   - `mov <reg>, <reg>` / `mov <reg>, <imm64>` / `mov <reg>, [reg +/- disp]` / `mov [reg +/- disp], <reg>`
+  - `movzx <reg64>, <reg8>`
   - `add <reg>, <reg|imm32>`, `sub <reg>, <reg|imm32>`
   - `imul <reg>, <reg|imm32>`
   - `and <reg>, <reg|imm32>`, `cmp <reg>, <reg|imm32>`
+  - `sete`, `setne`, `setl`, `setle`, `setg`, `setge` (8-bit register operand)
+  - `jmp <label>`, `je <label>`, `jne <label>`, `jl <label>`, `jle <label>`, `jg <label>`, `jge <label>`
   - `lea <reg>, [rip + label]`
   - `call <label>`
 
@@ -90,13 +93,11 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 ### Notes and limitations
 
 - The assembler encodes instructions into raw machine bytes and produces Windows PE executables. It handles labels within `.text` and `.data` sections, as well as external function calls via IAT.
-- Jump instructions (`jmp`, `je`, `jne`, etc.) and `setcc`/`movzx` are not yet supported in the custom assembler — programs using control flow (loops, conditionals) must be compiled with `--gcc` until those are added.
+- Control flow (loops, conditionals) is fully supported via `jmp`/`jcc` jump instructions, `setcc` conditional byte-set, and `movzx` zero-extension.
 - No ELF output — currently Windows PE only.
 
 ## Contributing / next steps
 
-- Add jump instructions (`jmp`, `je`, `jne`, `jl`, `jge`, etc.) with label resolution (two-pass: collect label offsets, patch displacements).
-- Add `setcc` variants (`sete`, `setne`, `setl`, `setle`, `setg`, `setge`) and `movzx` — unblocks comparisons without `--gcc`.
 - Emit ELF64 output (currently Windows PE only).
 - Extend the C frontend: function parameters, multiple types, `break`/`continue`, `switch`.
 - Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).

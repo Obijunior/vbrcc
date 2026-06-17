@@ -64,8 +64,25 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::IdivReg { .. } => 3,
         Instruction::LeaRegLabel { .. } => 7,
         Instruction::CallLabel { .. } => 5,
+
+        Instruction::SeteReg8 { .. } => 3,
+        Instruction::SetneReg8 { .. } => 3,
+        Instruction::SetlReg8 { .. } => 3,
+        Instruction::SetgReg8 { .. } => 3,
+        Instruction::SetleReg8 { .. } => 3,
+        Instruction::SetgeReg8 { .. } => 3,
+
+        Instruction::JeLabel { .. } => 6,
+        Instruction::JneLabel { .. } => 6,
+        Instruction::JlLabel { .. } => 6,
+        Instruction::JgLabel { .. } => 6,
+        Instruction::JleLabel { .. } => 6,
+        Instruction::JgeLabel { .. } => 6,
+        Instruction::JmpLabel { .. } => 5,
+        
         Instruction::MovRegImm64 { .. } => 10,
         Instruction::MovRegReg { .. } => 3,
+        Instruction::MovzxReg64Reg8 { .. } => 4,
         Instruction::MovMemDispReg { base, disp, .. } => {
             2 + mem_disp_len(base.low3(), *disp)
         }
@@ -79,6 +96,14 @@ pub fn encoded_len_with_labels(instruction: &Instruction, label_set: &HashSet<St
     match instruction {
         Instruction::CallLabel { label } => {
             if label_set.contains(label) { 5 } else { 6 }
+        }
+        Instruction::JeLabel { .. } | Instruction::JneLabel { .. }
+        | Instruction::JlLabel { .. } | Instruction::JgLabel { .. }
+        | Instruction::JleLabel { .. } | Instruction::JgeLabel { .. } => {
+            6
+        }
+        Instruction::JmpLabel { .. } => {
+            5
         }
         _ => encoded_len(instruction),
     }
@@ -118,6 +143,13 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let mut out = vec![r, 0x8B];
             out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
             out
+        }
+
+        Instruction::MovzxReg64Reg8 { dst, src } => {
+            // REX.W + 0F B6 /r is MOVZX r64, r/m8
+            let r = rex(true, dst.ext(), false, src.ext());
+            let m = modrm(0b11, dst.low3(), src.low3());
+            vec![r, 0x0F, 0xB6, m]
         }
         
         Instruction::AddRegReg { dst, src } => {
@@ -231,7 +263,41 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             vec![r, 0xF7, m]
         }
 
-        Instruction::LeaRegLabel { .. } | Instruction::CallLabel { .. } => {
+        Instruction::SeteReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x94, m]
+        }
+
+        Instruction::SetneReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x95, m]
+        }
+
+        Instruction::SetlReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x9C, m]
+        }
+
+        Instruction::SetgReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x9F, m]
+        }
+
+        Instruction::SetleReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x9E, m]
+        }
+
+        Instruction::SetgeReg8 { reg } => {
+            let m = modrm(0b11, 0b000, reg.low3()); // /0 in reg field
+            vec![0x0F, 0x9D, m]
+        }
+
+        Instruction::LeaRegLabel { .. } | Instruction::CallLabel { .. } 
+        | Instruction::JeLabel { .. } | Instruction::JneLabel { .. } 
+        | Instruction::JlLabel { .. } | Instruction::JgLabel { .. }
+        | Instruction::JleLabel { .. } | Instruction::JgeLabel { .. }
+        | Instruction::JmpLabel { .. } => {
             // Label-based encodings require relocation information.
             Vec::new()
         }
@@ -290,6 +356,49 @@ pub fn encode_with_labels(
             } else {
                 Err(format!("[ ERROR ] :: unknown label: {}", label))
             }
+        }
+        Instruction::JeLabel { label } | Instruction::JneLabel { label }
+        | Instruction::JlLabel { label } | Instruction::JgLabel { label }
+        | Instruction::JleLabel { label } | Instruction::JgeLabel { label } => {
+            let opcode_byte = match instruction {
+                Instruction::JeLabel { .. } => 0x84,
+                Instruction::JneLabel { .. } => 0x85,
+                Instruction::JlLabel { .. } => 0x8C,
+                Instruction::JgLabel { .. } => 0x8F,
+                Instruction::JleLabel { .. } => 0x8E,
+                Instruction::JgeLabel { .. } => 0x8D,
+                _ => unreachable!(),
+            };
+            let (section, offset) = labels
+                .get(label)
+                .ok_or_else(|| format!("[ ERROR ] :: unknown label: {}", label))?;
+            if *section != Section::Text {
+                return Err(format!("[ ERROR ] :: jump target must be in .text: {}", label));
+            }
+            let target_rva = text_rva + (*offset as u32);
+            let next_rva = instr_rva + 6; // 2 opcode bytes + 4 rel32 bytes
+            let disp = (target_rva as i64) - (next_rva as i64);
+            let disp32 = i32::try_from(disp)
+                .map_err(|_| format!("[ ERROR ] :: jump target out of range: {}", label))?;
+            let mut out = vec![0x0F, opcode_byte];
+            out.extend_from_slice(&disp32.to_le_bytes());
+            Ok(out)
+        }
+        Instruction::JmpLabel { label } => {
+            let (section, offset) = labels
+                .get(label)
+                .ok_or_else(|| format!("[ ERROR ] :: unknown label: {}", label))?;
+            if *section != Section::Text {
+                return Err(format!("[ ERROR ] :: jump target must be in .text: {}", label));
+            }
+            let target_rva = text_rva + (*offset as u32);
+            let next_rva = instr_rva + 5;
+            let disp = (target_rva as i64) - (next_rva as i64);
+            let disp32 = i32::try_from(disp)
+                .map_err(|_| format!("[ ERROR ] :: jump target out of range: {}", label))?;
+            let mut out = vec![0xE9];
+            out.extend_from_slice(&disp32.to_le_bytes());
+            Ok(out)
         }
         _ => Ok(encode(instruction)),
     }
