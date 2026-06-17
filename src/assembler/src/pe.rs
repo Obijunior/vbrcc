@@ -35,11 +35,13 @@ pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &
         data: text_code,
         characteristics: 0x60000020, // Code, Execute, Read
     });
-    sections.push(SectionDef {
-        name: b".data\0\0\0",
-        data: data_content,
-        characteristics: 0xC0000040, // Data, Read, Write
-    });
+    if !data_content.is_empty() {
+        sections.push(SectionDef {
+            name: b".data\0\0\0",
+            data: data_content,
+            characteristics: 0xC0000040, // Data, Read, Write
+        });
+    }
     if !idata_content.is_empty() {
         sections.push(SectionDef {
             name: b".idata\0\0",
