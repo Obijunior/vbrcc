@@ -403,3 +403,151 @@ pub fn encode_with_labels(
         _ => Ok(encode(instruction)),
     }
 }
+
+
+/*********************************
+*           UNIT TESTS           *
+**********************************/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::register::{Register64, Register8};
+
+    #[test]
+    fn encode_sete_al() {
+        let instr = Instruction::SeteReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x94, 0xC0]);
+        assert_eq!(encoded_len(&instr), 3);
+    }
+
+    #[test]
+    fn encode_setne_al() {
+        let instr = Instruction::SetneReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x95, 0xC0]);
+    }
+
+    #[test]
+    fn encode_setl_al() {
+        let instr = Instruction::SetlReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x9C, 0xC0]);
+    }
+
+    #[test]
+    fn encode_setg_al() {
+        let instr = Instruction::SetgReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x9F, 0xC0]);
+    }
+
+    #[test]
+    fn encode_setle_al() {
+        let instr = Instruction::SetleReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x9E, 0xC0]);
+    }
+
+    #[test]
+    fn encode_setge_al() {
+        let instr = Instruction::SetgeReg8 { reg: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x0F, 0x9D, 0xC0]);
+    }
+
+    #[test]
+    fn encode_sete_dl() {
+        let instr = Instruction::SeteReg8 { reg: Register8::Dl };
+        // dl = id 2, modrm(0b11, 0, 2) = 0xC2
+        assert_eq!(encode(&instr), vec![0x0F, 0x94, 0xC2]);
+    }
+
+    #[test]
+    fn encode_movzx_rax_al() {
+        let instr = Instruction::MovzxReg64Reg8 { dst: Register64::Rax, src: Register8::Al };
+        assert_eq!(encode(&instr), vec![0x48, 0x0F, 0xB6, 0xC0]);
+        assert_eq!(encoded_len(&instr), 4);
+    }
+
+    #[test]
+    fn encode_movzx_rcx_dl() {
+        let instr = Instruction::MovzxReg64Reg8 { dst: Register64::Rcx, src: Register8::Dl };
+        // rex(true, false, false, false)=0x48, modrm(0b11, 1, 2)=0xCA
+        assert_eq!(encode(&instr), vec![0x48, 0x0F, 0xB6, 0xCA]);
+    }
+
+    #[test]
+    fn encoded_len_jcc_variants() {
+        assert_eq!(encoded_len(&Instruction::JeLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JneLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JlLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JgLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JleLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JgeLabel { label: "x".into() }), 6);
+        assert_eq!(encoded_len(&Instruction::JmpLabel { label: "x".into() }), 5);
+    }
+
+    #[test]
+    fn encode_je_forward_jump() {
+        let mut labels = HashMap::new();
+        labels.insert("target".to_string(), (Section::Text, 20));
+        let externs = HashMap::new();
+        let instr = Instruction::JeLabel { label: "target".into() };
+        // instr at rva 0x1000, next_rva = 0x1006, target_rva = 0x1000 + 20 = 0x1014
+        // disp = 0x1014 - 0x1006 = 14
+        let bytes = encode_with_labels(&instr, &labels, &externs, 0x1000, 0x1000, 0x2000).unwrap();
+        assert_eq!(bytes[0], 0x0F);
+        assert_eq!(bytes[1], 0x84);
+        let disp = i32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
+        assert_eq!(disp, 14);
+    }
+
+    #[test]
+    fn encode_jmp_backward_jump() {
+        let mut labels = HashMap::new();
+        labels.insert("loop_start".to_string(), (Section::Text, 0));
+        let externs = HashMap::new();
+        let instr = Instruction::JmpLabel { label: "loop_start".into() };
+        // instr at rva 0x1000 + 30 = 0x101E, next_rva = 0x101E + 5 = 0x1023
+        // target_rva = 0x1000, disp = 0x1000 - 0x1023 = -35
+        let bytes = encode_with_labels(&instr, &labels, &externs, 0x101E, 0x1000, 0x2000).unwrap();
+        assert_eq!(bytes[0], 0xE9);
+        let disp = i32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        assert_eq!(disp, -35);
+    }
+
+    #[test]
+    fn encode_jne_label() {
+        let mut labels = HashMap::new();
+        labels.insert("end".to_string(), (Section::Text, 50));
+        let externs = HashMap::new();
+        let instr = Instruction::JneLabel { label: "end".into() };
+        let bytes = encode_with_labels(&instr, &labels, &externs, 0x1000, 0x1000, 0x2000).unwrap();
+        assert_eq!(bytes[0], 0x0F);
+        assert_eq!(bytes[1], 0x85);
+    }
+
+    #[test]
+    fn encode_jcc_unknown_label_errors() {
+        let labels = HashMap::new();
+        let externs = HashMap::new();
+        let instr = Instruction::JeLabel { label: "nonexistent".into() };
+        assert!(encode_with_labels(&instr, &labels, &externs, 0x1000, 0x1000, 0x2000).is_err());
+    }
+
+    #[test]
+    fn encoded_len_consistency() {
+        let setcc_instrs = vec![
+            Instruction::SeteReg8 { reg: Register8::Al },
+            Instruction::SetneReg8 { reg: Register8::Al },
+            Instruction::SetlReg8 { reg: Register8::Al },
+            Instruction::SetgReg8 { reg: Register8::Al },
+            Instruction::SetleReg8 { reg: Register8::Al },
+            Instruction::SetgeReg8 { reg: Register8::Al },
+        ];
+        for instr in &setcc_instrs {
+            let bytes = encode(instr);
+            assert_eq!(bytes.len(), encoded_len(instr),
+                "encoded_len mismatch for {:?}", instr);
+        }
+
+        let movzx = Instruction::MovzxReg64Reg8 { dst: Register64::Rax, src: Register8::Al };
+        assert_eq!(encode(&movzx).len(), encoded_len(&movzx));
+    }
+}

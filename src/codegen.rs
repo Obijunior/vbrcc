@@ -291,6 +291,10 @@ impl Codegen {
     }
 }
 
+/*********************************
+*           UNIT TESTS           *
+**********************************/
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +357,38 @@ mod tests {
         assert!(asm.contains("cmp rax, rcx"));
         assert!(asm.contains("setl al"));
         assert!(asm.contains("movzx rax, al"));
+    }
+
+    #[test]
+    fn test_equal_comparison() {
+        let asm = compile("int main() { return 1 == 2; }");
+        assert!(asm.contains("cmp rax, rcx"));
+        assert!(asm.contains("sete al"));
+        assert!(asm.contains("movzx rax, al"));
+    }
+
+    #[test]
+    fn test_not_equal_comparison() {
+        let asm = compile("int main() { return 1 != 2; }");
+        assert!(asm.contains("setne al"));
+    }
+
+    #[test]
+    fn test_less_equal_comparison() {
+        let asm = compile("int main() { return 1 <= 2; }");
+        assert!(asm.contains("setle al"));
+    }
+
+    #[test]
+    fn test_greater_than_comparison() {
+        let asm = compile("int main() { return 1 > 2; }");
+        assert!(asm.contains("setg al"));
+    }
+
+    #[test]
+    fn test_greater_equal_comparison() {
+        let asm = compile("int main() { return 1 >= 2; }");
+        assert!(asm.contains("setge al"));
     }
 
     #[test]

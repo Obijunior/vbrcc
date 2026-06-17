@@ -1,5 +1,6 @@
 use crate::register::{Register64, Register8};
 
+#[derive(Debug)]
 pub enum AsmLine {
     Instruction(Instruction),
     SectionChange(Section),
@@ -388,5 +389,151 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             Ok(AsmLine::Instruction(Instruction::MovzxReg64Reg8 { dst, src }))
         }
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
+    }
+}
+
+/*********************************
+*           UNIT TESTS           *
+**********************************/
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sete_al() {
+        match parse_intel_line("  sete al").unwrap() {
+            AsmLine::Instruction(Instruction::SeteReg8 { reg }) => {
+                assert_eq!(reg.low3(), 0); // AL
+            }
+            other => panic!("expected SeteReg8, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_setl_al() {
+        match parse_intel_line("  setl al").unwrap() {
+            AsmLine::Instruction(Instruction::SetlReg8 { .. }) => {}
+            other => panic!("expected SetlReg8, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_setne_cl() {
+        match parse_intel_line("  setne cl").unwrap() {
+            AsmLine::Instruction(Instruction::SetneReg8 { reg }) => {
+                assert_eq!(reg.low3(), 1); // CL
+            }
+            other => panic!("expected SetneReg8, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_all_setcc_variants() {
+        assert!(matches!(
+            parse_intel_line("setg al").unwrap(),
+            AsmLine::Instruction(Instruction::SetgReg8 { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("setle al").unwrap(),
+            AsmLine::Instruction(Instruction::SetleReg8 { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("setge al").unwrap(),
+            AsmLine::Instruction(Instruction::SetgeReg8 { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_movzx_rax_al() {
+        match parse_intel_line("  movzx rax, al").unwrap() {
+            AsmLine::Instruction(Instruction::MovzxReg64Reg8 { dst, src }) => {
+                assert_eq!(dst.low3(), 0); // RAX
+                assert_eq!(src.low3(), 0); // AL
+            }
+            other => panic!("expected MovzxReg64Reg8, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_movzx_rcx_dl() {
+        match parse_intel_line("movzx rcx, dl").unwrap() {
+            AsmLine::Instruction(Instruction::MovzxReg64Reg8 { dst, src }) => {
+                assert_eq!(dst.low3(), 1); // RCX
+                assert_eq!(src.low3(), 2); // DL
+            }
+            other => panic!("expected MovzxReg64Reg8, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_je_label() {
+        match parse_intel_line("  je loop_0_end").unwrap() {
+            AsmLine::Instruction(Instruction::JeLabel { label }) => {
+                assert_eq!(label, "loop_0_end");
+            }
+            other => panic!("expected JeLabel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_jmp_label() {
+        match parse_intel_line("  jmp loop_0_start").unwrap() {
+            AsmLine::Instruction(Instruction::JmpLabel { label }) => {
+                assert_eq!(label, "loop_0_start");
+            }
+            other => panic!("expected JmpLabel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_all_jcc_variants() {
+        assert!(matches!(
+            parse_intel_line("jne end").unwrap(),
+            AsmLine::Instruction(Instruction::JneLabel { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("jl target").unwrap(),
+            AsmLine::Instruction(Instruction::JlLabel { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("jle target").unwrap(),
+            AsmLine::Instruction(Instruction::JleLabel { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("jg target").unwrap(),
+            AsmLine::Instruction(Instruction::JgLabel { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("jge target").unwrap(),
+            AsmLine::Instruction(Instruction::JgeLabel { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_setcc_invalid_register_errors() {
+        assert!(parse_intel_line("sete rax").is_err());
+    }
+
+    #[test]
+    fn parse_movzx_wrong_operand_count_errors() {
+        assert!(parse_intel_line("movzx rax").is_err());
+    }
+
+    #[test]
+    fn parse_je_no_operand_errors() {
+        assert!(parse_intel_line("je").is_err());
+    }
+
+    #[test]
+    fn parse_labels() {
+        match parse_intel_line("loop_0_start:").unwrap() {
+            AsmLine::Label(name) => assert_eq!(name, "loop_0_start"),
+            other => panic!("expected Label, got {:?}", other),
+        }
+        match parse_intel_line("if_1_end:").unwrap() {
+            AsmLine::Label(name) => assert_eq!(name, "if_1_end"),
+            other => panic!("expected Label, got {:?}", other),
+        }
     }
 }
