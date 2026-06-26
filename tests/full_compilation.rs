@@ -67,3 +67,37 @@ fn test_full_compilation_nested_loops() {
     assert!(asm.contains("loop_1_start:"));
     assert!(asm.contains("loop_1_end:"));
 }
+
+#[test]
+fn test_full_compilation_logical_and() {
+    let asm = compile("int main() { return 1 && 2; }");
+    assert!(asm.contains("je and_0_false"));
+    assert!(asm.contains("and_0_false:"));
+    assert!(asm.contains("and_0_end:"));
+}
+
+#[test]
+fn test_full_compilation_logical_or() {
+    let asm = compile("int main() { return 0 || 1; }");
+    assert!(asm.contains("jne or_0_true"));
+    assert!(asm.contains("or_0_true:"));
+    assert!(asm.contains("or_0_end:"));
+}
+
+#[test]
+fn test_full_compilation_logical_and_in_if_condition() {
+    let asm = compile(
+        "int main() { int x = 5; if (x < 10 && x > 3) { return 1; } return 0; }"
+    );
+    // if grabs label 0 first, then && inside the condition gets label 1
+    assert!(asm.contains("and_1_false:"));
+    assert!(asm.contains("and_1_end:"));
+    assert!(asm.contains("if_0_end:"));
+}
+
+#[test]
+fn test_full_compilation_chained_logical_or() {
+    let asm = compile("int main() { return 0 || 0 || 1; }");
+    assert!(asm.contains("or_0_true:"));
+    assert!(asm.contains("or_1_true:"));
+}

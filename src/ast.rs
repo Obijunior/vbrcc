@@ -11,9 +11,9 @@ pub enum Expr {
 
 #[derive(Debug, PartialEq)]
 pub enum UnaryOp {
-    Negate,  // -
-    BitNot,  // ~
-    LogNot,  // !
+    Negate,     // -
+    BitNot,     // ~
+    LogNot,     // !
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,20 +29,32 @@ pub enum BinaryOp {
     Gte,
     Eq,
     Neq,
+    LogicalAnd, // &&
+    LogicalOr,  // ||
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
     Return(Expr),
     Expr(Expr),
-    VarDecl { name: String, init: Option<Expr> },
-    If { cond: Expr, then_branch: Vec<Stmt>, else_branch: Vec<Stmt> },
-    While { cond: Expr, body: Vec<Stmt> },
-    For { 
-        init: Box<Stmt>, // int i = 0 
-        cond: Expr, // i < x
+    VarDecl {
+        name: String,
+        init: Option<Expr>,
+    },
+    If {
+        cond: Expr,
+        then_branch: Vec<Stmt>,
+        else_branch: Vec<Stmt>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        init: Box<Stmt>,   // int i = 0
+        cond: Expr,        // i < x
         update: Box<Stmt>, // i++
-        body: Vec<Stmt> // { ... }
+        body: Vec<Stmt>,   // { ... }
     },
 }
 
@@ -55,4 +67,4 @@ pub struct Function {
 #[derive(Debug, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
-} 
+}

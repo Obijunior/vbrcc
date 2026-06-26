@@ -54,6 +54,7 @@ cargo test
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
 | If/else | `if (cond) { ... } else { ... }` |
+| Logical AND/OR | `&&`, `||` |
 
 ### Not yet supported
 

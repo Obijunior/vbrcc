@@ -1,4 +1,6 @@
 /target
+/.claude
+/graphify*
 
 # discard artifacts from compilation/testing
 *.o

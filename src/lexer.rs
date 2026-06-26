@@ -30,6 +30,8 @@ pub enum Token {
     StarEquals,
     SlashEquals,
     ModuloEquals,
+    LogicalAnd,
+    LogicalOr,
 
     // symbols
     LParen,
@@ -211,6 +213,24 @@ impl Lexer {
                 match self.current() {
                     Some('=') => { self.advance(); Token::GreaterThanEquals },
                     _ => Token::GreaterThan,
+                }
+            },
+            Some('&') => {
+                self.advance();
+                if self.current() == Some('&') { 
+                    self.advance(); 
+                    Token::LogicalAnd
+                } else {
+                    panic!("Unexpected character: '&' (did you mean '&&'?)");
+                }
+            },
+            Some('|') => {
+                self.advance();
+                if self.current() == Some('|') {
+                    self.advance();
+                    Token::LogicalOr
+                } else {
+                    panic!("Unexpected character: '|' (did you mean '||'?)");
                 }
             },
             None => Token::EOF,

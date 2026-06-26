@@ -146,3 +146,73 @@ fn parse_compound_assignment_in_program() {
         )),
     )));
 }
+
+#[test]
+fn parse_logical_and() {
+    let program = parse("int main() { return 1 && 2; }").unwrap();
+    let body = &program.functions[0].body;
+    assert_eq!(
+        body[0],
+        Stmt::Return(Expr::BinaryOp(
+            BinaryOp::LogicalAnd,
+            Box::new(Expr::IntLiteral(1)),
+            Box::new(Expr::IntLiteral(2)),
+        ))
+    );
+}
+
+#[test]
+fn parse_logical_or() {
+    let program = parse("int main() { return 0 || 1; }").unwrap();
+    let body = &program.functions[0].body;
+    assert_eq!(
+        body[0],
+        Stmt::Return(Expr::BinaryOp(
+            BinaryOp::LogicalOr,
+            Box::new(Expr::IntLiteral(0)),
+            Box::new(Expr::IntLiteral(1)),
+        ))
+    );
+}
+
+#[test]
+fn parse_logical_and_binds_tighter_than_or() {
+    // a || b && c  should parse as  a || (b && c)
+    let program = parse("int main() { return 0 || 1 && 2; }").unwrap();
+    let body = &program.functions[0].body;
+    assert_eq!(
+        body[0],
+        Stmt::Return(Expr::BinaryOp(
+            BinaryOp::LogicalOr,
+            Box::new(Expr::IntLiteral(0)),
+            Box::new(Expr::BinaryOp(
+                BinaryOp::LogicalAnd,
+                Box::new(Expr::IntLiteral(1)),
+                Box::new(Expr::IntLiteral(2)),
+            )),
+        ))
+    );
+}
+
+#[test]
+fn parse_logical_ops_bind_looser_than_comparison() {
+    // a < 5 && b > 3  should parse as  (a < 5) && (b > 3)
+    let program = parse("int main() { int a = 1; int b = 4; return a < 5 && b > 3; }").unwrap();
+    let body = &program.functions[0].body;
+    assert_eq!(
+        body[2],
+        Stmt::Return(Expr::BinaryOp(
+            BinaryOp::LogicalAnd,
+            Box::new(Expr::BinaryOp(
+                BinaryOp::Lt,
+                Box::new(Expr::Var("a".into())),
+                Box::new(Expr::IntLiteral(5)),
+            )),
+            Box::new(Expr::BinaryOp(
+                BinaryOp::Gt,
+                Box::new(Expr::Var("b".into())),
+                Box::new(Expr::IntLiteral(3)),
+            )),
+        ))
+    );
+}

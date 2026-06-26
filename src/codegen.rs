@@ -218,6 +218,42 @@ impl Codegen {
             }
 
             Expr::BinaryOp(op, left, right) => {
+                // logical AND and OR short-circuiting
+                // they aren't really binary operations in the same sense as +, -, *, /, etc, so we short circuit them here 
+                // before evaluating the left and right operands
+                
+                if *op == BinaryOp::LogicalAnd {
+                    let id = self.label_count;
+                    self.label_count += 1;
+                    self.gen_expr(left)?;
+                    self.emit("  cmp rax, 0");
+                    self.emit(&format!("  je and_{}_false", id));
+                    self.gen_expr(right)?;
+                    self.emit("  cmp rax, 0");
+                    self.emit(&format!("  je and_{}_false", id));
+                    self.emit("  mov rax, 1");
+                    self.emit(&format!("  jmp and_{}_end", id));
+                    self.emit(&format!("and_{}_false:", id));
+                    self.emit("  mov rax, 0");
+                    self.emit(&format!("and_{}_end:", id));
+                    return Ok(());
+                }
+                if *op == BinaryOp::LogicalOr {
+                    let id = self.label_count;
+                    self.label_count += 1;
+                    self.gen_expr(left)?;
+                    self.emit("  cmp rax, 0");
+                    self.emit(&format!("  jne or_{}_true", id));
+                    self.gen_expr(right)?;
+                    self.emit("  cmp rax, 0");
+                    self.emit(&format!("  jne or_{}_true", id));
+                    self.emit("  mov rax, 0");
+                    self.emit(&format!("  jmp or_{}_end", id));
+                    self.emit(&format!("or_{}_true:", id));
+                    self.emit("  mov rax, 1");
+                    self.emit(&format!("or_{}_end:", id));
+                    return Ok(());
+                }
                 // Evaluate left, push to stack
                 // Evaluate right, result in rax
                 // Pop left into rcx, perform op
@@ -274,6 +310,7 @@ impl Codegen {
                         self.emit("  setge al");
                         self.emit("  movzx rax, al");
                     }
+                    BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
             Expr::Assign(name, value) => {
@@ -431,5 +468,23 @@ mod tests {
         let asm = compile("int main() { return 10 % 3; }");
         assert!(asm.contains("idiv rcx"));
         assert!(asm.contains("mov rax, rdx"));
+    }
+
+    #[test]
+    fn test_logical_and() {
+        let asm = compile("int main() { return 1 && 2; }");
+        assert!(asm.contains("je and_0_false"));
+        assert!(asm.contains("and_0_false:"));
+        assert!(asm.contains("and_0_end:"));
+        assert!(!asm.contains("push rax"), "logical AND must not use the evaluate-both-sides pattern");
+    }
+
+    #[test]
+    fn test_logical_or() {
+        let asm = compile("int main() { return 0 || 1; }");
+        assert!(asm.contains("jne or_0_true"));
+        assert!(asm.contains("or_0_true:"));
+        assert!(asm.contains("or_0_end:"));
+        assert!(!asm.contains("push rax"), "logical OR must not use the evaluate-both-sides pattern");
     }
 }

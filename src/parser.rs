@@ -132,7 +132,7 @@ impl Parser {
                 Token::StarEquals => Some(BinaryOp::Mul),
                 Token::SlashEquals => Some(BinaryOp::Div),
                 Token::ModuloEquals => Some(BinaryOp::Mod),
-                _ => return self.parse_comparison(),
+                _ => return self.parse_logical_or(),
             };
             self.advance(); // ident
             self.advance(); // assignment token
@@ -147,7 +147,37 @@ impl Parser {
             });
         }
 
-        self.parse_comparison()
+        self.parse_logical_or()
+    }
+
+    fn parse_logical_or(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_logical_and()?;
+        loop {
+            match self.current() {
+                Token::LogicalOr => {
+                    self.advance(); // consume '||'
+                    let right = self.parse_logical_and()?;
+                    left = Expr::BinaryOp(BinaryOp::LogicalOr, Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_logical_and(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_comparison()?;
+        loop {
+            match self.current() {
+                Token::LogicalAnd => {
+                    self.advance();
+                    let right = self.parse_comparison()?;
+                    left = Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
