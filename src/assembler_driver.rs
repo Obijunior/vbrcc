@@ -1,12 +1,23 @@
 use std::path::Path;
 use std::process::Command;
 
-pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, use_gcc: bool) -> Result<(), String> {
-    if use_gcc {
-        assemble_and_link_with_gcc(asm_path, bin_path)?;
-    } else {
-        // Custom assembler emits a full PE executable; no external link step.
-        run_assembler(asm_path, bin_path)?;
+pub enum LinkerMode {
+    CustomPe,   // default: custom assembler emits full PE
+    Gcc,        // --gcc: gcc assembles + links
+    LldLink,    // --lld-link: custom assembler emits .obj, lld-link links
+}
+
+pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode) -> Result<(), String> {
+    match linker {
+        LinkerMode::CustomPe => {
+            run_assembler(asm_path, bin_path)?;
+        }
+        LinkerMode::Gcc => {
+            assemble_and_link_with_gcc(asm_path, bin_path)?;
+        }
+        LinkerMode::LldLink => {
+            print!("Not yet implemented: LldLink mode");
+        }
     }
     Ok(())
 }
