@@ -22,7 +22,7 @@ fn main() {
         .position(|a| a == "-o")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from)
-        .unwrap_or_else(|| input_path.with_extension("s"));
+        .unwrap_or_else(|| input_path.with_extension(""));
 
     // Read source file
     let source = fs::read_to_string(&input_path).unwrap_or_else(|e| {
