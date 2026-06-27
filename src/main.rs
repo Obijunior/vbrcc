@@ -17,6 +17,7 @@ fn main() {
 
     let input_path = PathBuf::from(&args[1]);
     let use_gcc = args.iter().any(|a| a == "-gcc" || a == "--gcc");
+    let use_lld = args.iter().any(|a| a == "-lld-link" || a == "--lld-link");
     let output_path = args
         .iter()
         .position(|a| a == "-o")
@@ -75,14 +76,24 @@ fn main() {
     println!("Wrote assembly to {:?}", asm_path);
 
     // --- Assemble and link ---
-    let bin_path = if use_gcc {
-        output_path.with_extension("")
+    let bin_path = if use_gcc || use_lld {
+        output_path.with_extension("exe")
     } else if output_path.extension().is_none() {
         output_path.with_extension("exe")
     } else {
         output_path.clone()
     };
-    assembler_driver::assemble_and_link(&asm_path, &bin_path, use_gcc).unwrap_or_else(|e| {
+
+    // will likely need to add better arg parsing later, but for now this is fine
+    let linker = if use_gcc {
+        assembler_driver::LinkerMode::Gcc
+    } else if use_lld {
+        assembler_driver::LinkerMode::LldLink
+    } else {
+        assembler_driver::LinkerMode::CustomPe
+    };
+
+    assembler_driver::assemble_and_link(&asm_path, &bin_path, linker).unwrap_or_else(|e| {
         eprintln!("[ ERROR ] :: {}", e);
         process::exit(1);
     });
