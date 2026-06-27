@@ -1,6 +1,6 @@
 # VBRCC - Very Basic Rust C Compiler
 
-A hobby C compiler written in Rust targeting x86-64 (Intel syntax), with a custom assembler implemented as a subcrate. Every stage is hand-rolled — no LLVM, no Cranelift, no parser generators.
+A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 
 ## Usage
 
@@ -10,7 +10,7 @@ Run the compiler with Cargo:
 cargo run -- <input.c> [-o <output_file>] [--gcc]
 ```
 
-- Default behavior: uses the custom assembler (Intel x86-64 syntax), while still using `gcc` as a linker.
+- Default behavior: uses the custom assembler (Intel x86-64 syntax)
 - Pass `--gcc` to use the system `gcc` to assemble and link instead.
 
 ## Tests
@@ -58,7 +58,7 @@ cargo test
 
 ### Not yet supported
 
-- Multiple types (only `int` for now)
+- Multiple types (all variables implicitly `int` for now)
 - Function definitions with parameters
 - Arrays, pointers, structs
 - `switch`, `do-while`, `break`, `continue`
@@ -91,14 +91,11 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 - running `gcc -S -masm=intel <c code>` will show you how `gcc` compiles the inputted c code 
 - Similar: `gcc -S -masm=intel -O0 -fno-asynchronous-unwind-tables -fno-ident input.c` but without optimizations or the `.seh_*` directives
 
-### Notes and limitations
-
-- The assembler encodes instructions into raw machine bytes and produces Windows PE executables. It handles labels within `.text` and `.data` sections, as well as external function calls via IAT.
-- Control flow (loops, conditionals) is fully supported via `jmp`/`jcc` jump instructions, `setcc` conditional byte-set, and `movzx` zero-extension.
-- No ELF output — currently Windows PE only.
-
-## Contributing / next steps
-
+## Roadmap (to C99)
+- add support for types
+- add support for pointers
+- add support for multiple functions and function parameters
+- using lld as a linker instead of gcc as a combined linker/assemblers
+- support for more C functionality: switch statements, break/continue, do while ...
 - Emit ELF64 output (currently Windows PE only).
-- Extend the C frontend: function parameters, multiple types, `break`/`continue`, `switch`.
 - Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).
