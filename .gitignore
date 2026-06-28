@@ -1,6 +1,7 @@
 /target
 /.claude
 /graphify*
+/.vscode
 
 # discard artifacts from compilation/testing
 *.o

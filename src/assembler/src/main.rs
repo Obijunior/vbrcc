@@ -1,14 +1,16 @@
 use std::env;
 use std::path::Path;
 use std::process;
+use std::collections::{HashMap, HashSet};
 
 mod pe;
 mod instruction;
 mod register;
 mod encoder;
+mod relocation;
 
-use crate::instruction::{AsmLine, Section};
-use std::collections::{HashMap, HashSet};
+use crate::instruction::{Instruction, Section, AsmLine};
+use crate::relocation::{Relocation, AssembleResult, Symbol};
 
 fn align(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
@@ -95,12 +97,13 @@ fn build_import_section(externs: &[String], idata_rva: u32) -> (Vec<u8>, HashMap
     (buf, iat_map)
 }
 
-fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
+// pass 1
+fn parse_lines(source: &str) -> Result<(Vec<(Section, AsmLine)>, HashSet<String>, HashSet<String>), String> {
     let mut lines: Vec<(Section, AsmLine)> = Vec::new();
     let mut label_names: HashSet<String> = HashSet::new();
+    let mut globals: HashSet<String> = HashSet::new();
     let mut current_section = Section::Text;
 
-    // Pass 1: parse and collect label names (no offsets)
     for (line_no, line) in source.lines().enumerate() {
         match instruction::parse_intel_line(line)
             .map_err(|e| format!("L{}: {}", line_no + 1, e))?
@@ -110,25 +113,39 @@ fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
             }
             AsmLine::Label(name) => {
                 if !label_names.insert(name.clone()) {
-                    return Err(format!("L{}: [ ERROR ] :: duplicate label: {}", line_no + 1, name));
+                    return Err(format!(
+                        "L{}: [ ERROR ] :: duplicate label: {}",
+                        line_no + 1,
+                        name
+                    ));
                 }
                 lines.push((current_section, AsmLine::Label(name)));
             }
             AsmLine::DataBytes(bytes) => {
-                lines.push((current_section.clone(), AsmLine::DataBytes(bytes)));
+                lines.push((current_section, AsmLine::DataBytes(bytes)));
             }
             AsmLine::Instruction(instr) => {
-                lines.push((current_section.clone(), AsmLine::Instruction(instr)));
+                lines.push((current_section, AsmLine::Instruction(instr)));
+            }
+            AsmLine::Globl(name) => {
+                globals.insert(name);
             }
             AsmLine::None => {}
         }
     }
+    Ok((lines, label_names, globals))
+}
 
-    // Pass 2: compute label offsets and section sizes
+// pass 2
+fn compute_layout(
+    lines: &[(Section, AsmLine)],
+    len_fn: impl Fn(&Instruction) -> usize,
+) -> (HashMap<String, (Section, usize)>, usize, usize) {
     let mut labels: HashMap<String, (Section, usize)> = HashMap::new();
     let mut text_offset: usize = 0;
     let mut data_offset: usize = 0;
-    for (section, line) in &lines {
+
+    for (section, line) in lines {
         match line {
             AsmLine::Label(name) => {
                 let offset = if *section == Section::Text {
@@ -142,7 +159,7 @@ fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
                 data_offset += bytes.len();
             }
             AsmLine::Instruction(instr) => {
-                let size = encoder::encoded_len_with_labels(instr, &label_names);
+                let size = len_fn(instr);
                 if *section == Section::Text {
                     text_offset += size;
                 } else {
@@ -153,6 +170,14 @@ fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
         }
     }
 
+    (labels, text_offset, data_offset)
+}
+
+fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
+    let (lines, label_names, _globals) = parse_lines(source)?;
+    let (labels, text_offset, data_offset) = compute_layout(&lines, |i| encoder::encoded_len_with_labels(i, &label_names));
+
+
     let mut externs: Vec<String> = Vec::new();
     for (_section, line) in &lines {
         if let AsmLine::Instruction(crate::instruction::Instruction::CallLabel { label }) = line {
@@ -162,9 +187,8 @@ fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
         }
     }
 
-    let text_size = text_offset;
     let text_rva: u32 = 0x1000;
-    let data_rva: u32 = (0x1000 + align(text_size, 0x1000)) as u32;
+    let data_rva: u32 = (0x1000 + align(text_offset, 0x1000)) as u32;
     let idata_rva: u32 = (data_rva as usize + align(data_offset, 0x1000)) as u32;
 
     let (idata_section, extern_map) = build_import_section(&externs, idata_rva);
@@ -209,6 +233,60 @@ fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
     }
 
     Ok((text_section, data_section, idata_section))
+}
+
+pub fn assemble_to_obj(source: &str) -> Result<AssembleResult, String> {
+    // Passes 1 & 2 — shared with assemble(), but COFF widths (plain encoded_len)
+    let (lines, label_names, _globals) = parse_lines(source)?;
+    let (labels, _text_size, _data_size) = compute_layout(&lines, encoder::encoded_len);
+
+    // External call targets = call labels with no local definition
+    let mut externs: Vec<String> = Vec::new();
+    for (_section, line) in &lines {
+        if let AsmLine::Instruction(Instruction::CallLabel { label }) = line {
+            if !label_names.contains(label) && !externs.contains(label) {
+                externs.push(label.clone());
+            }
+        }
+    }
+
+    // Pass 3 — encode in COFF mode, collecting relocations
+    let mut text_bytes  = Vec::new();
+    let mut data_bytes  = Vec::new();
+    let mut text_relocs: Vec<Relocation> = Vec::new();
+    let mut text_cursor: usize = 0;
+
+    for (section, line) in &lines {
+        match line {
+            AsmLine::DataBytes(bytes) => {
+                data_bytes.extend_from_slice(bytes);
+            }
+            AsmLine::Instruction(instr) => {
+                // instructions only ever live in .text in this compiler
+                let (bytes, relocs) =
+                    encoder::encode_for_obj(instr, &labels, *section, text_cursor as u32)?;
+                text_bytes.extend_from_slice(&bytes);
+                text_relocs.extend(relocs);
+                text_cursor += bytes.len();
+            }
+            _ => {}
+        }
+    }
+
+    // Symbols: every global defined label, plus every external call target
+    let mut symbols: Vec<Symbol> = Vec::new();
+    for (name, (section, offset)) in &labels {
+        symbols.push(Symbol {
+            name: name.clone(),
+            section: Some(*section),
+            offset: *offset as u32,
+        });
+    }
+    for name in &externs {
+        symbols.push(Symbol { name: name.clone(), section: None, offset: 0 });
+    }
+
+    Ok(AssembleResult { text_bytes, data_bytes, text_relocs, symbols })
 }
 
 fn main() {

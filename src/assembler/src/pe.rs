@@ -57,7 +57,11 @@ pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &
     let optional_header_size = 0xF0u32;
     let section_table_size = 40u32 * num_sections as u32;
 
-    let headers_unaligned = dos_header_size + pe_sig_size + coff_header_size + optional_header_size + section_table_size;
+    let headers_unaligned = dos_header_size
+        + pe_sig_size
+        + coff_header_size
+        + optional_header_size
+        + section_table_size;
     let size_of_headers = align_up(headers_unaligned, FILE_ALIGNMENT);
 
     // Compute RVAs and raw pointers
@@ -75,7 +79,11 @@ pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &
 
     let size_of_code = align_up(text_code.len() as u32, FILE_ALIGNMENT);
     let size_of_init_data = align_up(data_content.len() as u32, FILE_ALIGNMENT)
-        + if !idata_content.is_empty() { align_up(idata_content.len() as u32, FILE_ALIGNMENT) } else { 0 };
+        + if !idata_content.is_empty() {
+            align_up(idata_content.len() as u32, FILE_ALIGNMENT)
+        } else {
+            0
+        };
 
     let size_of_image = align_up(section_rva, SECTION_ALIGNMENT);
 

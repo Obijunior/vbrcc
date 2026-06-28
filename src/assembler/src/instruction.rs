@@ -6,6 +6,7 @@ pub enum AsmLine {
     SectionChange(Section),
     DataBytes(Vec<u8>),
     Label(String),
+    Globl(String),
     None,
 }
 
@@ -213,9 +214,14 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     }
 
     // Allow passthrough for directives for now.
-    if line.starts_with(".intel_syntax") || line.starts_with(".globl") {
-        return Ok(AsmLine::None);
+    if line.starts_with(".globl") { 
+        let name = line.strip_prefix(".globl").unwrap().trim().to_string();
+        if name.is_empty() {
+            return Err(format!("[ ERROR ] :: .globl expects a symbol name: {}", raw))
+        }
+        return Ok(AsmLine::Globl(name)); 
     }
+    if line.starts_with(".intel_syntax") { return Ok(AsmLine::None); }
     if line.starts_with('.') { return Ok(AsmLine::None); }
 
     let (opcode, operands) = split_instruction(line);
