@@ -94,13 +94,6 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 - running `gcc -S -masm=intel <c code>` will show you how `gcc` compiles the inputted c code 
 - Similar: `gcc -S -masm=intel -O0 -fno-asynchronous-unwind-tables -fno-ident input.c` but without optimizations or the `.seh_*` directives
 
-## Roadmap (to C99)
-- add support for types
-- add support for pointers
-- add support for multiple functions and function parameters
-- using lld as a linker instead of gcc as a combined linker/assemblers
-- support for more C functionality: switch statements, break/continue, do while ...
-- Emit ELF64 output (currently Windows PE only).
   
 ### Output formats
 
@@ -109,14 +102,14 @@ The assembler supports two output modes:
 - **PE executable** (default): Encodes instructions into raw machine bytes and produces a complete Windows PE32+ executable with DOS header, COFF header, section table, and import table. External calls (e.g., `printf`) are resolved via IAT.
 - **COFF `.obj`** (`--coff` flag): Emits a relocatable COFF object file with symbol table and `IMAGE_REL_AMD64_REL32` relocations for cross-section and external references. Designed to be linked by `lld-link`.
 
-### Notes and limitations
-
-- Control flow (loops, conditionals) is fully supported via `jmp`/`jcc` jump instructions, `setcc` conditional byte-set, and `movzx` zero-extension.
-- No ELF output — currently Windows PE/COFF only.
-
 ## Contributing / next steps
-
+- C99 compliance
 - Emit ELF64 output (currently Windows PE/COFF only).
-- Extend the C frontend: function parameters, multiple types, `break`/`continue`, `switch`.
 - Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).
 - Write a custom linker to replace `lld-link` dependency.
+
+## Roadmap to C99
+- add support for types
+- add support for pointers
+- add support for multiple functions and function parameters
+- support for more C functionality: switch statements, break/continue, do while ...
