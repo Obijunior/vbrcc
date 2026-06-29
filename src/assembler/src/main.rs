@@ -292,7 +292,7 @@ pub fn assemble_to_obj(source: &str) -> Result<AssembleResult, String> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
+    if args.len() < 3 {
         eprintln!("Usage: {} <input.s> <output.exe>", args[0]);
         process::exit(1);
     }
@@ -300,34 +300,54 @@ fn main() {
     let input_path = Path::new(&args[1]);
     let output_path = Path::new(&args[2]);
 
+    let use_coff = args.iter().any(|a| a == "-coff" || a == "--coff");
+
     // 1. Read the assembly source file
     let source = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
         eprintln!("[ ERROR ] :: Failed to read {:?}: {}", input_path, e);
         process::exit(1);
     });
 
-    // 2. Assemble the source into machine code and data buckets
-    // We use a match here instead of '?' because main() returns ()
-    match assemble(&source) {
-        Ok((text_section, data_section, idata_section)) => {
-            
-            // 3. Wrap the sections into a Windows Portable Executable (PE)
-            let final_exe = pe::create_pe_wrapper(&text_section, &data_section, &idata_section);
-            
-            // 4. Write the final binary to disk
-            if let Err(e) = std::fs::write(output_path, final_exe) {
+    if use_coff {
+        match assemble_to_obj(&source) {
+            Ok(result) => {
+            let obj_bytes = coff::create_coff_obj(&result);
+
+            if let Err(e) = std::fs::write(output_path, obj_bytes) {
                 eprintln!("[ ERROR ] :: Failed to write to {:?}: {}", output_path, e);
                 process::exit(1);
             }
-
-            println!("[ SUCCESS ] :: Created Windows Executable: {:?}", output_path);
-            println!("  - .text size: {} bytes", text_section.len());
-            println!("  - .data size: {} bytes", data_section.len());
-            println!("  - .idata size: {} bytes", idata_section.len());
+            println!("[ SUCCESS ] :: Created COFF object: {:?}", output_path);
+            }
+            Err(e) => {
+                eprintln!("[ ERROR ] :: Assembler error: {}", e);
+                process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("[ ERROR ] :: Assembler error: {}", e);
-            process::exit(1);
+    } else {
+        // 2. Assemble the source into machine code and data buckets
+        // We use a match here instead of '?' because main() returns ()
+        match assemble(&source) {
+            Ok((text_section, data_section, idata_section)) => {
+                
+                // 3. Wrap the sections into a Windows Portable Executable (PE)
+                let final_exe = pe::create_pe_wrapper(&text_section, &data_section, &idata_section);
+                
+                // 4. Write the final binary to disk
+                if let Err(e) = std::fs::write(output_path, final_exe) {
+                    eprintln!("[ ERROR ] :: Failed to write to {:?}: {}", output_path, e);
+                    process::exit(1);
+                }
+
+                println!("[ SUCCESS ] :: Created Windows Executable: {:?}", output_path);
+                println!("  - .text size: {} bytes", text_section.len());
+                println!("  - .data size: {} bytes", data_section.len());
+                println!("  - .idata size: {} bytes", idata_section.len());
+            }
+            Err(e) => {
+                eprintln!("[ ERROR ] :: Assembler error: {}", e);
+                process::exit(1);
+            }
         }
     }
 }
