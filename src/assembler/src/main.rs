@@ -324,7 +324,7 @@ fn main() {
                     .collect();
                 if !externals.is_empty() {
                     let def_path = Path::new(output_path).with_extension("def");
-                    let mut def = String::from("LIBRARY ucrtbase.dll\nEXPORTS\n");
+                    let mut def = String::from("LIBRARY msvcrt.dll\nEXPORTS\n");
                     for name in &externals {
                         def.push_str(&format!("    {}\n", name));
                     }
