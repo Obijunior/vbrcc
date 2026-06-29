@@ -8,6 +8,7 @@ mod instruction;
 mod register;
 mod encoder;
 mod relocation;
+mod coff;
 
 use crate::instruction::{Instruction, Section, AsmLine};
 use crate::relocation::{Relocation, AssembleResult, Symbol};
