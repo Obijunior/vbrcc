@@ -311,13 +311,30 @@ fn main() {
     if use_coff {
         match assemble_to_obj(&source) {
             Ok(result) => {
-            let obj_bytes = coff::create_coff_obj(&result);
+                let obj_bytes = coff::create_coff_obj(&result);
 
-            if let Err(e) = std::fs::write(output_path, obj_bytes) {
-                eprintln!("[ ERROR ] :: Failed to write to {:?}: {}", output_path, e);
-                process::exit(1);
-            }
-            println!("[ SUCCESS ] :: Created COFF object: {:?}", output_path);
+                if let Err(e) = std::fs::write(output_path, obj_bytes) {
+                    eprintln!("[ ERROR ] :: Failed to write to {:?}: {}", output_path, e);
+                    process::exit(1);
+                }
+
+                let externals: Vec<&str> = result.symbols.iter()
+                    .filter(|s| s.section.is_none())
+                    .map(|s| s.name.as_str())
+                    .collect();
+                if !externals.is_empty() {
+                    let def_path = Path::new(output_path).with_extension("def");
+                    let mut def = String::from("LIBRARY ucrtbase.dll\nEXPORTS\n");
+                    for name in &externals {
+                        def.push_str(&format!("    {}\n", name));
+                    }
+                    if let Err(e) = std::fs::write(&def_path, &def) {
+                        eprintln!("[ ERROR ] :: Failed to write .def: {}", e);
+                        process::exit(1);
+                    }
+                }
+
+                println!("[ SUCCESS ] :: Created COFF object: {:?}", output_path);
             }
             Err(e) => {
                 eprintln!("[ ERROR ] :: Assembler error: {}", e);
