@@ -4,14 +4,17 @@ A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 
 ## Usage
 
-Run the compiler with Cargo:
-
 ```sh
-cargo run -- <input.c> [-o <output_file>] [--gcc]
+cargo run -- <input.c> [-o <output_file>] [--lld-link] [--gcc]
 ```
 
-- Default behavior: uses the custom assembler (Intel x86-64 syntax)
-- Pass `--gcc` to use the system `gcc` to assemble and link instead.
+| Flag | Pipeline | External dependencies |
+|---|---|---|
+| *(none)* | Custom assembler emits a complete PE executable directly | None |
+| `--lld-link` | Custom assembler emits COFF `.obj`, then `lld-link` links it | LLVM (`lld-link`, `llvm-dlltool`) + Windows SDK |
+| `--gcc` | System `gcc` assembles and links | MinGW-w64 GCC |
+
+The default path is fully self-contained — no external tools needed. Use `--lld-link` when you need C standard library functions (e.g., `printf`) resolved via `msvcrt.dll`.
 
 ## Tests
 
@@ -98,4 +101,22 @@ The custom assembler (subcrate `src/assembler`) supports a small subset of Intel
 - using lld as a linker instead of gcc as a combined linker/assemblers
 - support for more C functionality: switch statements, break/continue, do while ...
 - Emit ELF64 output (currently Windows PE only).
+  
+### Output formats
+
+The assembler supports two output modes:
+
+- **PE executable** (default): Encodes instructions into raw machine bytes and produces a complete Windows PE32+ executable with DOS header, COFF header, section table, and import table. External calls (e.g., `printf`) are resolved via IAT.
+- **COFF `.obj`** (`--coff` flag): Emits a relocatable COFF object file with symbol table and `IMAGE_REL_AMD64_REL32` relocations for cross-section and external references. Designed to be linked by `lld-link`.
+
+### Notes and limitations
+
+- Control flow (loops, conditionals) is fully supported via `jmp`/`jcc` jump instructions, `setcc` conditional byte-set, and `movzx` zero-extension.
+- No ELF output — currently Windows PE/COFF only.
+
+## Contributing / next steps
+
+- Emit ELF64 output (currently Windows PE/COFF only).
+- Extend the C frontend: function parameters, multiple types, `break`/`continue`, `switch`.
 - Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).
+- Write a custom linker to replace `lld-link` dependency.
