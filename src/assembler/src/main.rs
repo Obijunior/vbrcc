@@ -342,15 +342,14 @@ fn main() {
             }
         }
     } else {
-        // 2. Assemble the source into machine code and data buckets
-        // We use a match here instead of '?' because main() returns ()
+        // assemble the source into machine code and data buckets, uses a match here instead of '?' because main() returns ()
         match assemble(&source) {
             Ok((text_section, data_section, idata_section)) => {
                 
-                // 3. Wrap the sections into a Windows Portable Executable (PE)
+                // wrap sections into a Windows Portable Executable (PE)
                 let final_exe = pe::create_pe_wrapper(&text_section, &data_section, &idata_section);
                 
-                // 4. Write the final binary to disk
+                // write final binary to disk
                 if let Err(e) = std::fs::write(output_path, final_exe) {
                     eprintln!("[ ERROR ] :: Failed to write to {:?}: {}", output_path, e);
                     process::exit(1);

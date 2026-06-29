@@ -5,7 +5,7 @@ A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 ## Usage
 
 ```sh
-cargo run -- <input.c> [-o <output_file>] [--lld-link] [--gcc]
+cargo run -- <input.c> [-o <output_file>] [--lld-link] [--gcc] [--keep-artifacts]
 ```
 
 | Flag | Pipeline | External dependencies |

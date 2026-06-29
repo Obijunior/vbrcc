@@ -11,13 +11,14 @@ mod assembler_driver;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.c> [-o <output>] [-gcc]", args[0]);
+        eprintln!("Usage: {} <input.c> [-o <output>] [-gcc] [-lld-link] [--keep-artifacts]", args[0]);
         process::exit(1);
     }
 
     let input_path = PathBuf::from(&args[1]);
     let use_gcc = args.iter().any(|a| a == "-gcc" || a == "--gcc");
     let use_lld = args.iter().any(|a| a == "-lld-link" || a == "--lld-link");
+    let keep_artifacts = args.iter().any(|a| a == "-keep" || a == "--keep-artifacts");
     let output_path = args
         .iter()
         .position(|a| a == "-o")
@@ -99,4 +100,17 @@ fn main() {
     });
 
     println!("Compiled binary to {:?}", bin_path);
+
+    // Clean up intermediate artifacts unless --keep-artifacts is passed
+    if !keep_artifacts {
+        let artifacts = [
+            output_path.with_extension("s"),
+            output_path.with_extension("obj"),
+            output_path.with_extension("def"),
+            output_path.with_extension("lib"),
+        ];
+        for path in &artifacts {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
