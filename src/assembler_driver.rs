@@ -105,7 +105,7 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path) -> Result<(), St
                 "-m", "i386:x86-64",
                 "-d", def_path.to_str().unwrap(),
                 "-l", implib_path.to_str().unwrap(),
-                "-D", "ucrtbase.dll",
+                "-D", "msvcrt.dll",
             ])
             .status()
             .map_err(|e| format!("Failed to run llvm-dlltool: {}", e))?;
