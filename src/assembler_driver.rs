@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process::Command;
+use crate::assembler;
 
 fn find_windows_sdk_lib() -> Result<String, String> {
     let kits_root = r"C:\Program Files (x86)\Windows Kits\10\Lib";
@@ -23,7 +24,7 @@ pub enum LinkerMode {
 pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode) -> Result<(), String> {
     match linker {
         LinkerMode::CustomPe => {
-            run_assembler(asm_path, bin_path)?;
+            assemble_to_pe(asm_path, bin_path)?;
         }
         LinkerMode::Gcc => {
             assemble_and_link_with_gcc(asm_path, bin_path)?;
@@ -35,26 +36,20 @@ pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode) -
     Ok(())
 }
 
-fn run_assembler(asm_path: &Path, out_path: &Path) -> Result<(), String> {
-    let status = Command::new("cargo")
-        .args([
-            "run",
-            "--manifest-path",
-            "src/assembler/Cargo.toml",
-            "--",
-            asm_path
-                .to_str()
-                .ok_or_else(|| "asm path is not valid UTF-8".to_string())?,
-            out_path
-                .to_str()
-                .ok_or_else(|| "output path is not valid UTF-8".to_string())?,
-        ])
-        .status()
-        .map_err(|e| format!("Failed to run assembler: {}", e))?;
+fn assemble_to_pe(asm_path: &Path, out_path: &Path) -> Result<(), String> {
+    let source = std::fs::read_to_string(asm_path)
+        .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
 
-    if !status.success() {
-        return Err(format!("assembler failed with status: {}", status));
-    }
+    let (text, data, idata) = assembler::assemble(&source)?;
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+
+    std::fs::write(out_path, pe)
+        .map_err(|e| format!("Failed to write {:?}: {}", out_path, e))?;
+
+    println!("[ SUCCESS ] :: Created Windows Executable: {:?}", out_path);
+    println!("  - .text size: {} bytes", text.len());
+    println!("  - .data size: {} bytes", data.len());
+    println!("  - .idata size: {} bytes", idata.len());
     Ok(())
 }
 
@@ -82,23 +77,39 @@ fn assemble_and_link_with_gcc(asm_path: &Path, bin_path: &Path) -> Result<(), St
 fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path) -> Result<(), String> {
     let obj_path = asm_path.with_extension("obj");
 
-    // Step 1: custom assembler → .obj
-    let status = Command::new("cargo")
-        .args(["run", "--manifest-path", "src/assembler/Cargo.toml", "--",
-               asm_path.to_str().unwrap(),
-               obj_path.to_str().unwrap(),
-               "--coff"])
-        .status()
-        .map_err(|e| format!("Failed to run assembler: {}", e))?;
-    if !status.success() {
-        return Err("assembler (COFF mode) failed".into());
-    }
+    // Step 1: custom assembler -> COFF .obj
+    let source = std::fs::read_to_string(asm_path)
+        .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
 
-    // Step 2: if assembler wrote a .def (has external symbols), generate import lib
+    let result = assembler::assemble_to_obj(&source)
+        .map_err(|e| format!("assembler (COFF mode) failed: {}", e))?;
+
+    let obj_bytes = assembler::coff::create_coff_obj(&result);
+    std::fs::write(&obj_path, obj_bytes)
+        .map_err(|e| format!("Failed to write .obj: {}", e))?;
+
+    // Step 1b: write .def if there are external symbols
+    let externals: Vec<&str> = result.symbols.iter()
+        .filter(|s| s.section.is_none())
+        .map(|s| s.name.as_str())
+        .collect();
+    let has_externals = !externals.is_empty();
+
     let def_path = obj_path.with_extension("def");
     let implib_path = obj_path.with_extension("lib");
-    let has_externals = def_path.exists();
 
+    if has_externals {
+        let mut def = String::from("LIBRARY msvcrt.dll\nEXPORTS\n");
+        for name in &externals {
+            def.push_str(&format!("    {}\n", name));
+        }
+        std::fs::write(&def_path, &def)
+            .map_err(|e| format!("Failed to write .def: {}", e))?;
+    }
+
+    println!("[ SUCCESS ] :: Created COFF object: {:?}", obj_path);
+
+    // Step 2: if assembler wrote a .def (has external symbols), generate import lib
     if has_externals {
         let status = Command::new("llvm-dlltool")
             .args([
@@ -114,7 +125,7 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path) -> Result<(), St
         }
     }
 
-    // Step 3: lld-link → .exe
+    // Step 3: lld-link -> .exe
     let sdk = find_windows_sdk_lib()?;
     let mut lld_args = vec![
         format!("/entry:main"),

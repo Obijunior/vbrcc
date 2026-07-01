@@ -1,4 +1,4 @@
-use crate::register::{Register64, Register8};
+use super::register::{Register64, Register8};
 
 #[derive(Debug)]
 pub enum AsmLine {
@@ -104,7 +104,7 @@ fn split_instruction(line: &str) -> (&str, Vec<&str>) {
     } else {
         rest.split(',').map(|s| s.trim()).collect()
     };
-    (opcode, operands)    
+    (opcode, operands)
 }
 
 fn parse_mem_operand(op: &str) -> Option<(Register64, i32)> {
@@ -214,12 +214,12 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     }
 
     // Allow passthrough for directives for now.
-    if line.starts_with(".globl") { 
+    if line.starts_with(".globl") {
         let name = line.strip_prefix(".globl").unwrap().trim().to_string();
         if name.is_empty() {
             return Err(format!("[ ERROR ] :: .globl expects a symbol name: {}", raw))
         }
-        return Ok(AsmLine::Globl(name)); 
+        return Ok(AsmLine::Globl(name));
     }
     if line.starts_with(".intel_syntax") { return Ok(AsmLine::None); }
     if line.starts_with('.') { return Ok(AsmLine::None); }

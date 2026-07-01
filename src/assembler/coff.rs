@@ -1,27 +1,27 @@
 use std::collections::HashMap;
 
-use crate::relocation::{AssembleResult};
-use crate::instruction::Section;
+use super::relocation::AssembleResult;
+use super::instruction::Section;
 
 // === Helper Functions ===
 
 // 2 bytes
-fn push_u16(buf: &mut Vec<u8>, v: u16) { 
-    buf.extend_from_slice(&v.to_le_bytes()); 
+fn push_u16(buf: &mut Vec<u8>, v: u16) {
+    buf.extend_from_slice(&v.to_le_bytes());
 }
 
 // 4 bytes
-fn push_u32(buf: &mut Vec<u8>, v: u32) { 
-    buf.extend_from_slice(&v.to_le_bytes()); 
+fn push_u32(buf: &mut Vec<u8>, v: u32) {
+    buf.extend_from_slice(&v.to_le_bytes());
 }
 
-// COFF object generator 
+// COFF object generator
 pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
     const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
     const IMAGE_SYM_CLASS_EXTERNAL: u8 = 2;
     const IMAGE_SYM_CLASS_STATIC: u8 = 3;
     // const IMAGE_SYM_UNDEFINED: i16 = 0;
-    const IMAGE_REL_AMD64_REL32: u16 = 0x0004;
+    // const IMAGE_REL_AMD64_REL32: u16 = 0x0004;  <- defined in RelocationType
     const COFF_HEADER_SIZE: usize = 20;
     const SECTION_HEADER_SIZE: usize = 40;
     const SYMBOL_SIZE: usize = 18;
@@ -34,8 +34,8 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
     let r = source.text_relocs.len();
     let num_sections = 2;                 // always .text + .data
 
-    // let file_header = 0;        
-    // let section_headers = 20;   
+    // let file_header = 0;
+    // let section_headers = 20;
     let text_raw_ptr = COFF_HEADER_SIZE+(SECTION_HEADER_SIZE*num_sections);
     let text_reloc_ptr = text_raw_ptr + text_bytes.len();
     let data_raw_ptr = text_reloc_ptr + (RELOCATION_SIZE*r);
@@ -46,8 +46,8 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
     let sym_index: HashMap<&str, u32> = symbols.iter().enumerate()
         .map(|(i, s)| (s.name.as_str(), i as u32))
         .collect();
-    
-    // --- 1. COFF header --- 
+
+    // --- 1. COFF header ---
     push_u16(&mut coff, IMAGE_FILE_MACHINE_AMD64);       // Machine
     push_u16(&mut coff, num_sections as u16);            // NumberOfSections
     push_u32(&mut coff, 0);                              // TimeDateStamp
@@ -69,8 +69,8 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
     push_u16(&mut coff, r as u16);                  // NumberOfRelocations
     push_u16(&mut coff, 0);                         // NumberOfLineNumbers
     push_u32(&mut coff, 0x60500020);                // Characteristics
-    
-    
+
+
     // --- 2b. .data
     coff.extend_from_slice(b".data\0\0\0");                // Name
     push_u32(&mut coff, 0);                         // VirtualSize
@@ -93,10 +93,10 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
             .unwrap_or_else(|| panic!("relocation references undefined symbol: {}", reloc.symbol_name));
         push_u32(&mut coff, reloc.offset);                  // VirtualAddress
         push_u32(&mut coff, idx);                           // SymbolTableIndex
-        push_u16(&mut coff, IMAGE_REL_AMD64_REL32);         // Type
+        push_u16(&mut coff, reloc.rel_type as u16);         // Type
     }
     debug_assert_eq!(coff.len(), data_raw_ptr);
-    
+
     // --- 3c. .data raw data
     coff.extend_from_slice(data_bytes);
     debug_assert_eq!(coff.len(), symtab_ptr);
@@ -126,7 +126,7 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
         push_u32(&mut coff, sym.offset);             // Value
         push_u16(&mut coff, section_number);         // SectionNumber
         push_u16(&mut coff, 0);                      // Type (0x20 for funcs, optional)
-        coff.push(storage_class);                           // StorageClass   
+        coff.push(storage_class);                           // StorageClass
         coff.push(0);                                       // NumberOfAuxSymbols
     }
 
@@ -142,8 +142,8 @@ pub fn create_coff_obj(source: &AssembleResult) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::create_coff_obj;
-    use crate::relocation::{AssembleResult, Symbol, Relocation, RelocationType};
-    use crate::instruction::Section;
+    use crate::assembler::relocation::{AssembleResult, Symbol, Relocation, RelocationType};
+    use crate::assembler::instruction::Section;
 
     #[test]
     fn test_coff_header_magic() {

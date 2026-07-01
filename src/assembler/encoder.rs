@@ -1,6 +1,5 @@
-// use crate::register::Register64;
-use crate::instruction::{Instruction, Section};
-use crate::relocation::{Relocation, RelocationType};
+use super::instruction::{Instruction, Section};
+use super::relocation::{Relocation, RelocationType};
 use std::collections::{HashMap, HashSet};
 
 fn rex(w: bool, r: bool, x: bool, b: bool) -> u8 {
@@ -456,7 +455,7 @@ pub fn encode_for_obj(
                 out.extend_from_slice(&disp32.to_le_bytes());
                 Ok((out, vec![]))
             } else {
-                // cross-section: placeholer displacement, linker patches it
+                // cross-section: placeholder displacement, linker patches it
                 let mut out = vec![r, 0x8D, m];
                 out.extend_from_slice(&0i32.to_le_bytes()); // placeholder
                 let reloc = Relocation {
@@ -469,7 +468,7 @@ pub fn encode_for_obj(
         }
         Instruction::CallLabel { label } => {
             if let Some((section, offset)) = labels.get(label) {
-                // Internal call — resolve directly
+                // Internal call -- resolve directly
                 if *section != Section::Text {
                     return Err(format!("[ ERROR ] :: call target must be in .text: {}", label));
                 }
@@ -481,7 +480,7 @@ pub fn encode_for_obj(
                 out.extend_from_slice(&disp32.to_le_bytes());
                 Ok((out, vec![]))
             } else {
-                // External call (e.g., printf) — placeholder, linker resolves
+                // External call (e.g., printf) -- placeholder, linker resolves
                 let mut out = vec![0xE8];
                 out.extend_from_slice(&0i32.to_le_bytes());
                 let reloc = Relocation {
@@ -548,7 +547,7 @@ pub fn encode_for_obj(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::register::{Register64, Register8};
+    use crate::assembler::register::{Register64, Register8};
 
     #[test]
     fn encode_sete_al() {

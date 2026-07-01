@@ -1,4 +1,4 @@
-use crate::instruction::Section;
+use super::instruction::Section;
 
 #[derive(Debug)]
 pub struct Relocation {
@@ -7,9 +7,9 @@ pub struct Relocation {
     pub rel_type: RelocationType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum RelocationType {
-    Rel32,     // IMAGE_REL_AMD64_REL32 (0x0004) — RIP-relative 32-bit
+    Rel32 = 0x0004,     // IMAGE_REL_AMD64_REL32 (0x0004) -- RIP-relative 32-bit
 }
 
 pub struct AssembleResult {

@@ -6,6 +6,7 @@ mod ast;
 mod lexer;
 mod parser;
 mod codegen;
+mod assembler;
 mod assembler_driver;
 
 fn main() {

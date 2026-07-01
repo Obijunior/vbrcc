@@ -69,7 +69,7 @@ cargo test
 
 ## Assembler: currently supported features
 
-The custom assembler (subcrate `src/assembler`) supports a small subset of Intel x86-64 instructions and registers:
+The custom assembler (`src/assembler/` module) supports a small subset of Intel x86-64 instructions and registers:
 
 - Syntax: Intel syntax (the assembler accepts `.intel_syntax noprefix`).
 - Registers: all 64-bit general-purpose registers (RAX–R15) and 8-bit sub-registers (AL, BL, CL, DL).

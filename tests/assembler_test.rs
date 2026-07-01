@@ -2,36 +2,15 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::process::Command;
 
-// Test 1: Basic assembler invocation (run the assembler subcrate via cargo)
+use rust_c_compiler::assembler;
+
+// Test 1: Basic assembler invocation via library API
 #[test]
-fn test_assembler_basic_invocation() -> Result<(), Box<dyn std::error::Error>> {
+fn test_assembler_basic_invocation() {
     let asm = ".intel_syntax noprefix\n.globl main\nmain:\n  mov rax, 42\n  ret\n";
-    let mut asm_path = std::env::temp_dir();
-    asm_path.push("test_asm_basic.s");
-    let mut out_obj = std::env::temp_dir();
-    out_obj.push("test_asm_basic.o");
-
-    File::create(&asm_path)?.write_all(asm.as_bytes())?;
-
-    // Invoke the assembler subcrate the same way the project does.
-    let status = Command::new("cargo")
-        .args(&[
-            "run",
-            "--manifest-path",
-            "src/assembler/Cargo.toml",
-            "--",
-            asm_path.to_str().unwrap(),
-            out_obj.to_str().unwrap(),
-        ])
-        .status()?;
-
-    if !status.success() {
-        return Err(format!("assembler process failed with status: {}", status).into());
-    }
-
-    let meta = fs::metadata(&out_obj)?;
-    assert!(meta.len() > 0, "object file should be non-empty");
-    Ok(())
+    let (text, data, idata) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
 // Test 2: Use system `gcc` to assemble the same intel-syntax file (skip if gcc missing)
@@ -66,7 +45,7 @@ fn test_assemble_with_gcc() -> Result<(), Box<dyn std::error::Error>> {
 
 // Test 3: Assembler handles arithmetic and comparison instructions
 #[test]
-fn test_assembler_arithmetic_instructions() -> Result<(), Box<dyn std::error::Error>> {
+fn test_assembler_arithmetic_instructions() {
     let asm = r#".intel_syntax noprefix
 .globl main
 main:
@@ -86,36 +65,14 @@ main:
   pop rbp
   ret
 "#;
-    let mut asm_path = std::env::temp_dir();
-    asm_path.push("test_asm_arithmetic.s");
-    let mut out_obj = std::env::temp_dir();
-    out_obj.push("test_asm_arithmetic.o");
-
-    File::create(&asm_path)?.write_all(asm.as_bytes())?;
-
-    let status = Command::new("cargo")
-        .args(&[
-            "run",
-            "--manifest-path",
-            "src/assembler/Cargo.toml",
-            "--",
-            asm_path.to_str().unwrap(),
-            out_obj.to_str().unwrap(),
-        ])
-        .status()?;
-
-    if !status.success() {
-        return Err(format!("assembler failed on arithmetic instructions: {}", status).into());
-    }
-
-    let meta = fs::metadata(&out_obj)?;
-    assert!(meta.len() > 0, "object file should be non-empty");
-    Ok(())
+    let (text, data, idata) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
 // Test 4: Assembler handles control flow instructions (setcc, movzx, jumps, labels)
 #[test]
-fn test_assembler_control_flow_instructions() -> Result<(), Box<dyn std::error::Error>> {
+fn test_assembler_control_flow_instructions() {
     let asm = r#".intel_syntax noprefix
 .globl main
 main:
@@ -179,31 +136,9 @@ if_1_end:
   jmp loop_0_start
 loop_0_end:
 "#;
-    let mut asm_path = std::env::temp_dir();
-    asm_path.push("test_asm_control_flow.s");
-    let mut out_obj = std::env::temp_dir();
-    out_obj.push("test_asm_control_flow.o");
-
-    File::create(&asm_path)?.write_all(asm.as_bytes())?;
-
-    let status = Command::new("cargo")
-        .args(&[
-            "run",
-            "--manifest-path",
-            "src/assembler/Cargo.toml",
-            "--",
-            asm_path.to_str().unwrap(),
-            out_obj.to_str().unwrap(),
-        ])
-        .status()?;
-
-    if !status.success() {
-        return Err(format!("assembler failed on control flow instructions: {}", status).into());
-    }
-
-    let meta = fs::metadata(&out_obj)?;
-    assert!(meta.len() > 0, "object file should be non-empty");
-    Ok(())
+    let (text, data, idata) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
 // Test 5: Full pipeline: run the main crate to compile a tiny C program to a binary.
