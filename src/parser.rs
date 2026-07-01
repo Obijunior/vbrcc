@@ -48,8 +48,9 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Result<Function, String> {
-        // int
+        // int for now
         self.expect(&Token::Int)?;
+        let return_type = "int".to_string();
 
         // function name
         let name = match self.advance().clone() {
@@ -57,8 +58,17 @@ impl Parser {
             other => return Err(format!("[ ERROR ] :: Expected function name, got {:?}", other)),
         };
 
-        // ()
+        // () parse params
+        let mut params = Vec::new();
         self.expect(&Token::LParen)?;
+        while self.current() != &Token::RParen {
+            self.expect(&Token::Int)?;
+            let new_param = match self.advance().clone() {
+                Token::Ident(s) => s,
+                other => return Err(format!("[ ERROR ] :: Expected param name, got {:?}", other)),
+            };
+            params.push(new_param);
+        }
         self.expect(&Token::RParen)?;
 
         // { ... }
@@ -69,7 +79,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Function { name, body })
+        Ok(Function { name, params, return_type, body })
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, String> {

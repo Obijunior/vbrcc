@@ -61,6 +61,8 @@ pub enum Stmt {
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<String>,
+    pub return_type: String,
     pub body: Vec<Stmt>,
 }
 

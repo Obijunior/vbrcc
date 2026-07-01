@@ -1,6 +1,6 @@
-use rust_c_compiler::lexer::Lexer;
-use rust_c_compiler::parser::Parser;
-use rust_c_compiler::ast::*;
+use vbrcc::lexer::Lexer;
+use vbrcc::parser::Parser;
+use vbrcc::ast::*;
 
 fn parse(source: &str) -> Result<Program, String> {
     let mut lexer = Lexer::new(source);
@@ -17,6 +17,8 @@ fn parse_return_literal_program() {
         Program {
             functions: vec![Function {
                 name: "main".to_string(),
+                params: vec![],
+                return_type: "int".to_string(),
                 body: vec![Stmt::Return(Expr::IntLiteral(42))],
             }]
         }

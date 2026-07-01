@@ -32,6 +32,7 @@ pub enum Token {
     ModuloEquals,
     LogicalAnd,
     LogicalOr,
+    // Hashtag, // <- later, for preprocessor directives. commenting to avoid compiler warnings
 
     // symbols
     LParen,
@@ -177,6 +178,14 @@ impl Lexer {
                     },
                     _ => Token::Slash,
                 }
+            },
+            Some('#') => {
+                // for now just pretend preprocessor directives are comments and skip them
+                self.advance();
+                while self.current() != Some('\n') && self.current().is_some() {
+                    self.advance();
+                }
+                return self.next_token();
             },
             Some('%') => { 
                 self.advance(); 

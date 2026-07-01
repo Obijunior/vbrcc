@@ -1,9 +1,9 @@
-use rust_c_compiler::codegen::Codegen;
+use vbrcc::codegen::Codegen;
 
 fn compile(source: &str) -> String {
-    let mut lexer = rust_c_compiler::lexer::Lexer::new(source);
+    let mut lexer = vbrcc::lexer::Lexer::new(source);
     let tokens = lexer.tokenize();
-    let mut parser = rust_c_compiler::parser::Parser::new(tokens);
+    let mut parser = vbrcc::parser::Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let mut codegen = Codegen::new();
     codegen.generate(&program).unwrap()

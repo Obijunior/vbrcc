@@ -75,7 +75,7 @@ fn main() {
         process::exit(1);
     });
 
-    println!("Wrote assembly to {:?}", asm_path);
+    println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
 
     // --- Assemble and link ---
     let bin_path = if use_gcc || use_lld {
@@ -100,7 +100,7 @@ fn main() {
         process::exit(1);
     });
 
-    println!("Compiled binary to {:?}", bin_path);
+    println!("[ SUCCESS ] :: Compiled binary to {:?}", bin_path);
 
     // Clean up intermediate artifacts unless --keep-artifacts is passed
     if !keep_artifacts {

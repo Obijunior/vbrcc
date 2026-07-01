@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::process::Command;
 
-use rust_c_compiler::assembler;
+use vbrcc::assembler;
 
 // Test 1: Basic assembler invocation via library API
 #[test]

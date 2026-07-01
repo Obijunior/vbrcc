@@ -1,4 +1,4 @@
-use rust_c_compiler::lexer::{Lexer, Token};
+use vbrcc::lexer::{Lexer, Token};
 
 #[test]
 fn basic_tokenize() {

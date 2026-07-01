@@ -62,31 +62,53 @@ impl Codegen {
         Ok(final_output)
     }
 
+    fn align_up(value: i64, align: i64) -> i64 {
+        (value + align - 1) & !(align - 1)
+    }
+
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
-        // Reset state for each function
         self.variables.clear();
         self.stack_offset = 0;
 
-        // make sure gcc can assemble our output by using Intel syntax and no prefixes
+        // Header + prologue, up to but NOT including the frame reservation.
         self.emit("  .intel_syntax noprefix");
-
-        // Emit the function label, visible to the linker
         self.emit(&format!("  .globl {}", func.name));
         self.emit(&format!("{}:", func.name));
-
-        // Function prologue — set up the stack frame
         self.emit("  push rbp");
         self.emit("  mov rbp, rsp");
-        // Windows x64 ABI: reserve 32-byte shadow space, keep 16-byte alignment
-        self.emit("  sub rsp, 32");
+
+        // Divert emission into a scratch buffer while we generate params + body,
+        // so stack_offset reaches its final (most-negative) value before we size the frame.
+        let outer = std::mem::take(&mut self.output);
+
+        let arg_regs = ["rcx", "rdx", "r8", "r9"];
+        for (i, param) in func.params.iter().enumerate() {
+            if i >= arg_regs.len() {
+                return Err(format!(
+                    "[ ERROR ] :: functions with more than {} parameters not supported",
+                    arg_regs.len()
+                ));
+            }
+            self.stack_offset -= 8;
+            let offset = self.stack_offset;
+            self.variables.insert(param.clone(), offset);
+            self.emit(&format!("  mov [rbp - {}], {}", -offset, arg_regs[i]));
+        }
 
         for stmt in &func.body {
             self.gen_statement(stmt)?;
         }
 
+        let body = std::mem::replace(&mut self.output, outer);
+
+        // Frame = locals/params bytes + 32 shadow space, rounded up to 16-byte alignment.
+        let locals_bytes = -self.stack_offset;            // >= 0
+        let frame = Codegen::align_up(locals_bytes + 32, 16);
+        self.emit(&format!("  sub rsp, {}", frame));
+        self.output.push_str(&body);
+
         Ok(())
     }
-
     fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Return(expr) => {
