@@ -40,6 +40,16 @@ impl Codegen {
         self.emit_data(&format!("    .ascii \"{}\\0\"", s.escape_default()));
         label
     }
+    
+    fn align_up(value: i64, align: i64) -> i64 {
+        (value + align - 1) & !(align - 1)
+    }
+
+    fn emit_epilogue(&mut self) {
+        self.emit("  mov rsp, rbp");
+        self.emit("  pop rbp");
+        self.emit("  ret");
+    }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Reserve space for data section (filled in as we go)
@@ -62,9 +72,6 @@ impl Codegen {
         Ok(final_output)
     }
 
-    fn align_up(value: i64, align: i64) -> i64 {
-        (value + align - 1) & !(align - 1)
-    }
 
     fn gen_function(&mut self, func: &Function) -> Result<(), String> {
         self.variables.clear();
@@ -107,15 +114,17 @@ impl Codegen {
         self.emit(&format!("  sub rsp, {}", frame));
         self.output.push_str(&body);
 
+        // fail-safe epilogue in case the function doesn't return explicitly
+        self.emit("  xor rax, rax");
+        self.emit_epilogue();
+
         Ok(())
     }
     fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Return(expr) => {
                 self.gen_expr(expr)?;
-                self.emit(" mov rsp, rbp");
-                self.emit("  pop rbp");
-                self.emit("  ret");
+                self.emit_epilogue();
             }
             Stmt::For { init, cond, update, body } => {
                 let id = self.label_count;

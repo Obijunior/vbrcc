@@ -62,7 +62,6 @@ cargo test
 ### Not yet supported
 
 - Multiple types (all variables implicitly `int` for now)
-- Function definitions with parameters
 - Arrays, pointers, structs
 - `switch`, `do-while`, `break`, `continue`
 - Preprocessor directives (`#include`, `#define`)
@@ -111,5 +110,4 @@ The assembler supports two output modes:
 ## Roadmap to C99
 - add support for types
 - add support for pointers
-- add support for multiple functions and function parameters
 - support for more C functionality: switch statements, break/continue, do while ...
