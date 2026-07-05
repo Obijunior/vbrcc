@@ -5,7 +5,7 @@ A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 ## Usage
 
 ```sh
-cargo run -- <input.c> [-o <output_file>] [--lld-link] [--gcc] [--keep-artifacts]
+cargo run -- <input.c> [-o <output_file>] [--lld-link/--gcc] [--keep-artifacts]
 ```
 
 | Flag | Pipeline | External dependencies |
@@ -104,7 +104,6 @@ The assembler supports two output modes:
 ## Contributing / next steps
 - C99 compliance
 - Emit ELF64 output (currently Windows PE/COFF only).
-- Proper x86-64 calling convention compliance (stack alignment, prologue/epilogue).
 - Write a custom linker to replace `lld-link` dependency.
 
 ## Roadmap to C99
