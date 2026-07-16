@@ -26,6 +26,26 @@ mod assembler;
 mod assembler_driver;
 mod diagnostic;
 
+#[cfg(windows)]
+fn enable_ansi() {
+    // Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING on stderr so ANSI works in legacy consoles.
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+    unsafe extern "system" {
+        fn GetStdHandle(n_std_handle: u32) -> *mut core::ffi::c_void;
+        fn GetConsoleMode(h: *mut core::ffi::c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(h: *mut core::ffi::c_void, mode: u32) -> i32;
+    }
+    unsafe {
+        let handle = GetStdHandle(STD_ERROR_HANDLE);
+        let mut mode: u32 = 0;
+        if GetConsoleMode(handle, &mut mode) != 0 {
+            let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+}
+
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -50,14 +70,23 @@ fn main() {
         process::exit(1);
     });
 
+    let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    #[cfg(windows)]
+    enable_ansi();
+
     // --- Stage 1: Lex ---
     let mut lexer = lexer::Lexer::new(&source);
-    let tokens = lexer.tokenize();
+    let spanned_tokens = lexer.tokenize().unwrap_or_else(|e| {
+        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        process::exit(1);
+    });
+    // TEMP
+    let tokens: Vec<lexer::Token> = spanned_tokens.iter().map(|st| st.token.clone()).collect();
 
     if std::env::var("DUMP_TOKENS").is_ok() {
         eprintln!("=== TOKENS ===");
-        for tok in &tokens {
-            eprintln!("{:?}", tok);
+        for token in &spanned_tokens {
+            eprintln!("{:?}", token);
         }
     }
 
