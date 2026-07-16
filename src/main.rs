@@ -24,6 +24,7 @@ mod parser;
 mod codegen;
 mod assembler;
 mod assembler_driver;
+mod diagnostic;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
