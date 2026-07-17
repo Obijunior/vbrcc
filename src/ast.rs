@@ -1,60 +1,49 @@
+use crate::diagnostic::{Span, Spanned};
+
 #[derive(Debug, PartialEq)]
 pub enum Expr {
     IntLiteral(i64),
     StringLiteral(String),
-    UnaryOp(UnaryOp, Box<Expr>),
-    BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
+    UnaryOp(UnaryOp, Box<Spanned<Expr>>),
+    BinaryOp(BinaryOp, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
     Var(String),
-    FunctionCall { name: String, args: Vec<Expr> },
-    Assign(String, Box<Expr>), // name = value
+    FunctionCall {
+        name: String,
+        args: Vec<Spanned<Expr>>,
+    },
+    Assign(String, Box<Spanned<Expr>>), // name = value
 }
 
 #[derive(Debug, PartialEq)]
 pub enum UnaryOp {
-    Negate,     // -
-    BitNot,     // ~
-    LogNot,     // !
+    Negate, // -
+    BitNot, // ~
+    LogNot, // !
 }
 
 #[derive(Debug, PartialEq)]
 pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-    Eq,
-    Neq,
-    LogicalAnd, // &&
-    LogicalOr,  // ||
+    Add, Sub, Mul, Div, Mod,
+    Lt, Lte, Gt, Gte, Eq, Neq,
+    LogicalAnd, LogicalOr,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
-    Return(Expr),
-    Expr(Expr),
-    VarDecl {
-        name: String,
-        init: Option<Expr>,
-    },
+    Return(Spanned<Expr>),
+    Expr(Spanned<Expr>),
+    VarDecl { name: String, init: Option<Spanned<Expr>> },
     If {
-        cond: Expr,
-        then_branch: Vec<Stmt>,
-        else_branch: Vec<Stmt>,
+        cond: Spanned<Expr>,
+        then_branch: Vec<Spanned<Stmt>>,
+        else_branch: Vec<Spanned<Stmt>>,
     },
-    While {
-        cond: Expr,
-        body: Vec<Stmt>,
-    },
+    While { cond: Spanned<Expr>, body: Vec<Spanned<Stmt>> },
     For {
-        init: Box<Stmt>,   // int i = 0
-        cond: Expr,        // i < x
-        update: Box<Stmt>, // i++
-        body: Vec<Stmt>,   // { ... }
+        init: Box<Spanned<Stmt>>,
+        cond: Spanned<Expr>,
+        update: Box<Spanned<Stmt>>,
+        body: Vec<Spanned<Stmt>>,
     },
 }
 
@@ -63,7 +52,8 @@ pub struct Function {
     pub name: String,
     pub params: Vec<String>,
     pub return_type: String,
-    pub body: Vec<Stmt>,
+    pub body: Vec<Spanned<Stmt>>,
+    pub span: Span,
 }
 
 #[derive(Debug, PartialEq)]

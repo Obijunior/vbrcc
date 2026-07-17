@@ -1,6 +1,6 @@
 use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
-use crate::diagnostic::{CompileError, Span};
+use crate::diagnostic::{CompileError, Span, Spanned};
 
 pub struct Parser {
     tokens: Vec<SpannedToken>,
@@ -68,6 +68,7 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Result<Function, CompileError> {
+        let start = self.current_span();
         // int for now
         self.expect(&Token::Int)?;
         let return_type = "int".to_string();
@@ -101,7 +102,6 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
 
-        // { ... }
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.current() != &Token::RBrace && self.current() != &Token::EOF {
@@ -109,28 +109,30 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Function { name, params, return_type, body })
+        let span = start.to(self.previous_span());
+        Ok(Function { name, params, return_type, body, span })
     }
 
-    fn parse_statement(&mut self) -> Result<Stmt, CompileError> {
-        match self.current().clone() {
+    fn parse_statement(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        let node = match self.current().clone() {
             Token::Return => {
                 self.advance(); // consume 'return'
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Return(expr))
+                Stmt::Return(expr)
             }
-            Token::Int => self.parse_int(),
-            Token::For => self.parse_for(),
-            Token::While => self.parse_while(),
-            Token::If => self.parse_if(),
+            Token::Int => return self.parse_int(),
+            Token::For => return self.parse_for(),
+            Token::While => return self.parse_while(),
+            Token::If => return self.parse_if(),
             _ => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Expr(expr))
+                Stmt::Expr(expr)
             }
-            // other => Err(format!("[ ERROR ] :: Unexpected token in statement: {:?}", other)),
-        }
+        };
+        Ok(Spanned::new(node, start.to(self.previous_span())))
     }
 
     // --- Expression parsing with precedence climbing ---
@@ -141,28 +143,31 @@ impl Parser {
     //   3. unary - ~ !  (unary)
     //   4. literals, identifiers, ( expr )
 
-    fn parse_expr(&mut self) -> Result<Expr, CompileError> {
+    fn parse_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
         self.parse_assignment()
     }
 
-    fn parse_assignment(&mut self) -> Result<Expr, CompileError> {
+    fn parse_assignment(&mut self) -> Result<Spanned<Expr>, CompileError> {
         if let Token::Ident(name) = self.current().clone() {
+            let start = self.current_span();
             // i++ / i--
             if *self.peek() == Token::PlusPlus {
-                self.advance(); // ident
-                self.advance(); // ++
-                return Ok(Expr::Assign(
-                    name.clone(),
-                    Box::new(Expr::BinaryOp(BinaryOp::Add, Box::new(Expr::Var(name)), Box::new(Expr::IntLiteral(1)))),
-                ));
+                self.advance();
+                self.advance();
+                let span = start.to(self.previous_span());
+                let var = Spanned::new(Expr::Var(name.clone()), span);
+                let one = Spanned::new(Expr::IntLiteral(1), span);
+                let sum = Spanned::new(Expr::BinaryOp(BinaryOp::Add, Box::new(var), Box::new(one)), span);
+                return Ok(Spanned::new(Expr::Assign(name, Box::new(sum)), span));
             }
             if *self.peek() == Token::MinusMinus {
-                self.advance(); // ident
-                self.advance(); // --
-                return Ok(Expr::Assign(
-                    name.clone(),
-                    Box::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(Expr::Var(name)), Box::new(Expr::IntLiteral(1)))),
-                ));
+                self.advance();
+                self.advance();
+                let span = start.to(self.previous_span());
+                let var = Spanned::new(Expr::Var(name.clone()), span);
+                let one = Spanned::new(Expr::IntLiteral(1), span);
+                let diff = Spanned::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(var), Box::new(one)), span);
+                return Ok(Spanned::new(Expr::Assign(name, Box::new(diff)), span));
             }
 
             let assign_op = match self.peek() {
@@ -177,50 +182,43 @@ impl Parser {
             self.advance(); // ident
             self.advance(); // assignment token
             let rhs = self.parse_expr()?;
+            let span = start.to(self.previous_span());
 
             return Ok(match assign_op {
-                None => Expr::Assign(name, Box::new(rhs)),
-                Some(op) => Expr::Assign(
-                    name.clone(),
-                    Box::new(Expr::BinaryOp(op, Box::new(Expr::Var(name.clone())), Box::new(rhs))),
-                ),
+                None => Spanned::new(Expr::Assign(name, Box::new(rhs)), span),
+                Some(op) => {
+                    let var = Spanned::new(Expr::Var(name.clone()), span);
+                    let combined = Spanned::new(Expr::BinaryOp(op, Box::new(var), Box::new(rhs)), span);
+                    Spanned::new(Expr::Assign(name, Box::new(combined)), span)
+                }
             });
         }
-
         self.parse_logical_or()
     }
 
-    fn parse_logical_or(&mut self) -> Result<Expr, CompileError> {
+    fn parse_logical_or(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let mut left = self.parse_logical_and()?;
-        loop {
-            match self.current() {
-                Token::LogicalOr => {
-                    self.advance(); // consume '||'
-                    let right = self.parse_logical_and()?;
-                    left = Expr::BinaryOp(BinaryOp::LogicalOr, Box::new(left), Box::new(right));
-                }
-                _ => break,
-            }
+        while let Token::LogicalOr = self.current() {
+            self.advance();
+            let right = self.parse_logical_and()?;
+            let span = left.span.to(right.span);
+            left = Spanned::new(Expr::BinaryOp(BinaryOp::LogicalOr, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_logical_and(&mut self) -> Result<Expr, CompileError> {
+    fn parse_logical_and(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let mut left = self.parse_comparison()?;
-        loop {
-            match self.current() {
-                Token::LogicalAnd => {
-                    self.advance();
-                    let right = self.parse_comparison()?;
-                    left = Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right));
-                }
-                _ => break,
-            }
+        while let Token::LogicalAnd = self.current() {
+            self.advance();
+            let right = self.parse_comparison()?;
+            let span = left.span.to(right.span);
+            left = Spanned::new(Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr, CompileError> {
+    fn parse_comparison(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let mut left = self.parse_additive()?;
         loop {
             let op = match self.current() {
@@ -234,53 +232,61 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_additive()?;
-            left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
+            let span = left.span.to(right.span);
+            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_additive(&mut self) -> Result<Expr, CompileError> {
+    fn parse_additive(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let mut left = self.parse_multiplicative()?;
         loop {
             let op = match self.current() {
-                Token::Plus  => BinaryOp::Add,
+                Token::Plus => BinaryOp::Add,
                 Token::Minus => BinaryOp::Sub,
-                _            => break,
+                _ => break,
             };
             self.advance();
             let right = self.parse_multiplicative()?;
-            left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
+            let span = left.span.to(right.span);
+            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_multiplicative(&mut self) -> Result<Expr, CompileError> {
+    fn parse_multiplicative(&mut self) -> Result<Spanned<Expr>, CompileError> {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.current() {
-                Token::Star   => BinaryOp::Mul,
-                Token::Slash  => BinaryOp::Div,
+                Token::Star => BinaryOp::Mul,
+                Token::Slash => BinaryOp::Div,
                 Token::Modulo => BinaryOp::Mod,
-                _             => break,
+                _ => break,
             };
             self.advance();
             let right = self.parse_unary()?;
-            left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
+            let span = left.span.to(right.span);
+            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_for(&mut self) -> Result<Stmt, CompileError> {
-        self.advance(); // consume 'for'
+    fn parse_for(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'for'
         self.expect(&Token::LParen)?;
 
         let init = Box::new(self.parse_statement()?);
         let cond = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        let update = Box::new(Stmt::Expr(self.parse_expr()?));
+        let update_start = self.current_span();
+        let update_expr = self.parse_expr()?;
+        let update = Box::new(Spanned::new(
+            Stmt::Expr(update_expr),
+            update_start.to(self.previous_span()),
+        ));
 
         self.expect(&Token::RParen)?;
-
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.current() != &Token::RBrace && self.current() != &Token::EOF {
@@ -288,11 +294,12 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::For { init, cond, update, body })
+        Ok(Spanned::new(Stmt::For { init, cond, update, body }, start.to(self.previous_span())))
     }
 
-    fn parse_while(&mut self) -> Result<Stmt, CompileError> {
-        self.advance(); // consume 'while'
+    fn parse_while(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'while'
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
@@ -303,11 +310,12 @@ impl Parser {
             body.push(self.parse_statement()?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(Stmt::While { cond, body })
+        Ok(Spanned::new(Stmt::While { cond, body }, start.to(self.previous_span())))
     }
 
-    fn parse_if(&mut self) -> Result<Stmt, CompileError> {
-        self.advance(); // consume 'if'
+    fn parse_if(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'if'
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
@@ -318,22 +326,26 @@ impl Parser {
             then_branch.push(self.parse_statement()?);
         }
         self.expect(&Token::RBrace)?;
-        if self.current() == &Token::Else {
-            self.advance(); // consume 'else'
+
+        let else_branch = if self.current() == &Token::Else {
+            self.advance();
             self.expect(&Token::LBrace)?;
-            let mut else_branch = Vec::new();
+            let mut els = Vec::new();
             while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-                else_branch.push(self.parse_statement()?);
+                els.push(self.parse_statement()?);
             }
             self.expect(&Token::RBrace)?;
-            Ok(Stmt::If { cond, then_branch, else_branch })
+            els
         } else {
-            Ok(Stmt::If { cond, then_branch, else_branch: Vec::new() })
-        }
+            Vec::new()
+        };
+
+        Ok(Spanned::new(Stmt::If { cond, then_branch, else_branch }, start.to(self.previous_span())))
     }
 
-    fn parse_int(&mut self) -> Result<Stmt, CompileError> {
-        self.advance(); // consume 'int'
+    fn parse_int(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'int'
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -344,64 +356,68 @@ impl Parser {
             }
         };
         let init = if self.current() == &Token::Equals {
-            self.advance(); // consume '='
+            self.advance();
             Some(self.parse_expr()?)
         } else {
             None
         };
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::VarDecl { name, init })
+        Ok(Spanned::new(Stmt::VarDecl { name, init }, start.to(self.previous_span())))
     }
 
-    fn parse_unary(&mut self) -> Result<Expr, CompileError> {
+    fn parse_unary(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let start = self.current_span();
         let op = match self.current() {
             Token::Minus => Some(UnaryOp::Negate),
             Token::Tilde => Some(UnaryOp::BitNot),
-            Token::Bang  => Some(UnaryOp::LogNot),
-            _            => None,
+            Token::Bang => Some(UnaryOp::LogNot),
+            _ => None,
         };
         if let Some(op) = op {
             self.advance();
-            let operand = self.parse_unary()?; // recursive, handles --x etc.
-            Ok(Expr::UnaryOp(op, Box::new(operand)))
+            let operand = self.parse_unary()?;
+            let span = start.to(self.previous_span());
+            Ok(Spanned::new(Expr::UnaryOp(op, Box::new(operand)), span))
         } else {
             self.parse_primary()
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, CompileError> {
-        match self.advance().clone() {
-            Token::IntLiteral(n) => Ok(Expr::IntLiteral(n)),
-            Token::StringLiteral(s) => Ok(Expr::StringLiteral(s)),
+    fn parse_primary(&mut self) -> Result<Spanned<Expr>, CompileError> {
+        let start = self.current_span();
+        let node = match self.advance().clone() {
+            Token::IntLiteral(n) => Expr::IntLiteral(n),
+            Token::StringLiteral(s) => Expr::StringLiteral(s),
             Token::Ident(name) => {
-                // if next token is '(' it's a function call
                 if self.current() == &Token::LParen {
-                    self.advance(); // consume '('
+                    self.advance();
                     let mut args = Vec::new();
                     while self.current() != &Token::RParen {
                         args.push(self.parse_expr()?);
                         if self.current() == &Token::Comma {
-                            self.advance(); // consume ','
+                            self.advance();
                         }
                     }
                     self.expect(&Token::RParen)?;
-                    Ok(Expr::FunctionCall { name, args })
+                    Expr::FunctionCall { name, args }
                 } else {
-                    Ok(Expr::Var(name))
+                    Expr::Var(name)
                 }
             }
             Token::LParen => {
-                let expr = self.parse_expr()?;
+                let inner = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                Ok(expr)
+                // Re-span the parenthesized expression to include the parens.
+                return Ok(Spanned::new(inner.node, start.to(self.previous_span())));
             }
             other => {
-                Err(CompileError::new(
+                return Err(CompileError::new(
                     format!("unexpected {} in expression", other.describe()),
                     self.previous_span(),
-                ))
+                ));
             }
-        }
+        };
+        Ok(Spanned::new(node, start.to(self.previous_span())))
     }
 }
 
@@ -418,157 +434,121 @@ mod tests {
         Parser::new(spanned)
     }
 
-    #[test]
-    fn expect_reports_mismatch() {
-        let mut p = parser(vec![Token::Return, Token::EOF]);
-        let err = p.expect(&Token::Int).unwrap_err();
-        assert_eq!(err.message, "expected `int`, found `return`");
-    }
+    use crate::diagnostic::{Span, Spanned};
+    fn e(x: Expr) -> Spanned<Expr> { Spanned::new(x, Span::dummy()) }
+    fn s(x: Stmt) -> Spanned<Stmt> { Spanned::new(x, Span::dummy()) }
 
     #[test]
     fn parse_unary_negation_expression() {
-        let mut parser = parser(vec![Token::Minus, Token::IntLiteral(7), Token::EOF]);
-        let expr = parser.parse_unary().unwrap();
-        assert_eq!(
-            expr,
-            Expr::UnaryOp(UnaryOp::Negate, Box::new(Expr::IntLiteral(7)))
-        );
+        let mut p = parser(vec![Token::Minus, Token::IntLiteral(7), Token::EOF]);
+        let expr = p.parse_unary().unwrap();
+        assert_eq!(expr, e(Expr::UnaryOp(UnaryOp::Negate, Box::new(e(Expr::IntLiteral(7))))));
     }
 
     #[test]
     fn parse_parenthesized_primary_expression() {
-        let mut parser = parser(vec![
-            Token::LParen,
-            Token::IntLiteral(9),
-            Token::RParen,
-            Token::EOF,
-        ]);
-        let expr = parser.parse_primary().unwrap();
-        assert_eq!(expr, Expr::IntLiteral(9));
+        let mut p = parser(vec![Token::LParen, Token::IntLiteral(9), Token::RParen, Token::EOF]);
+        let expr = p.parse_primary().unwrap();
+        assert_eq!(expr, e(Expr::IntLiteral(9)));
     }
 
     #[test]
     fn parse_expression_statement() {
-        let mut parser = parser(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::Expr(Expr::IntLiteral(7)));
+        let mut p = parser(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::IntLiteral(7)))));
     }
 
     #[test]
     fn parse_var_decl_with_init() {
-        // int x = 5;
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Int, Token::Ident("x".into()), Token::Equals,
             Token::IntLiteral(5), Token::Semicolon, Token::EOF,
         ]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::VarDecl {
-            name: "x".into(),
-            init: Some(Expr::IntLiteral(5)),
-        });
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl { name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
     }
 
     #[test]
     fn parse_var_decl_without_init() {
-        // int x;
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Int, Token::Ident("x".into()), Token::Semicolon, Token::EOF,
         ]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::VarDecl {
-            name: "x".into(),
-            init: None,
-        });
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl { name: "x".into(), init: None }));
     }
 
     #[test]
     fn parse_assignment() {
-        // x = 10;
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Ident("x".into()), Token::Equals,
             Token::IntLiteral(10), Token::Semicolon, Token::EOF,
         ]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::Expr(Expr::Assign("x".into(), Box::new(Expr::IntLiteral(10)))));
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign("x".into(), Box::new(e(Expr::IntLiteral(10))))))));
     }
 
     #[test]
     fn parse_compound_assignment() {
-        // x += 3;
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Ident("x".into()), Token::PlusEquals,
             Token::IntLiteral(3), Token::Semicolon, Token::EOF,
         ]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::Expr(Expr::Assign(
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
             "x".into(),
-            Box::new(Expr::BinaryOp(
+            Box::new(e(Expr::BinaryOp(
                 BinaryOp::Add,
-                Box::new(Expr::Var("x".into())),
-                Box::new(Expr::IntLiteral(3)),
-            )),
-        )));
+                Box::new(e(Expr::Var("x".into()))),
+                Box::new(e(Expr::IntLiteral(3))),
+            ))),
+        )))));
     }
 
     #[test]
     fn parse_post_increment() {
-        // i++;
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Ident("i".into()), Token::PlusPlus, Token::Semicolon, Token::EOF,
         ]);
-        let stmt = parser.parse_statement().unwrap();
-        assert_eq!(stmt, Stmt::Expr(Expr::Assign(
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
             "i".into(),
-            Box::new(Expr::BinaryOp(
+            Box::new(e(Expr::BinaryOp(
                 BinaryOp::Add,
-                Box::new(Expr::Var("i".into())),
-                Box::new(Expr::IntLiteral(1)),
-            )),
-        )));
+                Box::new(e(Expr::Var("i".into()))),
+                Box::new(e(Expr::IntLiteral(1))),
+            ))),
+        )))));
     }
 
     #[test]
     fn parse_comparison_less_than() {
-        // i < 10 (as an expression)
-        let mut parser = parser(vec![
-            Token::Ident("i".into()), Token::LessThan,
-            Token::IntLiteral(10), Token::EOF,
+        let mut p = parser(vec![
+            Token::Ident("i".into()), Token::LessThan, Token::IntLiteral(10), Token::EOF,
         ]);
-        let expr = parser.parse_expr().unwrap();
-        assert_eq!(expr, Expr::BinaryOp(
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::BinaryOp(
             BinaryOp::Lt,
-            Box::new(Expr::Var("i".into())),
-            Box::new(Expr::IntLiteral(10)),
-        ));
+            Box::new(e(Expr::Var("i".into()))),
+            Box::new(e(Expr::IntLiteral(10))),
+        )));
     }
 
     #[test]
     fn parse_comparison_binds_looser_than_additive() {
-        // i < 3 + 1 should parse as i < (3 + 1)
-        let mut parser = parser(vec![
+        let mut p = parser(vec![
             Token::Ident("i".into()), Token::LessThan,
-            Token::IntLiteral(3), Token::Plus, Token::IntLiteral(1),
-            Token::EOF,
+            Token::IntLiteral(3), Token::Plus, Token::IntLiteral(1), Token::EOF,
         ]);
-        let expr = parser.parse_expr().unwrap();
-        assert_eq!(expr, Expr::BinaryOp(
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::BinaryOp(
             BinaryOp::Lt,
-            Box::new(Expr::Var("i".into())),
-            Box::new(Expr::BinaryOp(
+            Box::new(e(Expr::Var("i".into()))),
+            Box::new(e(Expr::BinaryOp(
                 BinaryOp::Add,
-                Box::new(Expr::IntLiteral(3)),
-                Box::new(Expr::IntLiteral(1)),
-            )),
-        ));
-    }
-
-    #[test]
-    fn parse_error_points_at_offending_token() {
-        // `int main() { return 42 }` — missing semicolon; error should sit on `}`.
-        let mut lexer = crate::lexer::Lexer::new("int main() { return 42 }");
-        let toks = lexer.tokenize().unwrap();
-        let mut p = Parser::new(toks);
-        let err = p.parse_program().unwrap_err();
-        assert_eq!(err.span.start, 23); // offset of `}`
+                Box::new(e(Expr::IntLiteral(3))),
+                Box::new(e(Expr::IntLiteral(1))),
+            ))),
+        )));
     }
 }

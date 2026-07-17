@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::diagnostic::Spanned;
 use std::collections::HashMap;
 
 pub struct Codegen {
@@ -120,8 +121,8 @@ impl Codegen {
 
         Ok(())
     }
-    fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
-        match stmt {
+    fn gen_statement(&mut self, stmt: &Spanned<Stmt>) -> Result<(), String> {
+        match &stmt.node {
             Stmt::Return(expr) => {
                 self.gen_expr(expr)?;
                 self.emit_epilogue();
@@ -204,8 +205,8 @@ impl Codegen {
         Ok(())
     }
 
-    fn gen_expr(&mut self, expr: &Expr) -> Result<(), String> {
-        match expr {
+    fn gen_expr(&mut self, expr: &Spanned<Expr>) -> Result<(), String> {
+        match &expr.node {
             Expr::IntLiteral(n) => {
                 // Move the literal directly into %rax
                 self.emit(&format!("  mov rax, {}", n));
@@ -369,8 +370,8 @@ mod tests {
 
     fn compile(source: &str) -> String {
         let mut lexer = crate::lexer::Lexer::new(source);
-        let tokens = lexer.tokenize().unwrap().into_iter().map(|st| st.token).collect();
-        let mut parser = crate::parser::Parser::new(tokens); 
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = crate::parser::Parser::new(tokens);
         let program = parser.parse_program().unwrap();
         let mut codegen = Codegen::new();
         codegen.generate(&program).unwrap()
