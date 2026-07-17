@@ -2,7 +2,7 @@ use vbrcc::codegen::Codegen;
 
 fn compile(source: &str) -> String {
     let mut lexer = vbrcc::lexer::Lexer::new(source);
-    let tokens = lexer.tokenize().unwrap().into_iter().map(|st| st.token).collect();
+    let tokens = lexer.tokenize().unwrap();
     let mut parser = vbrcc::parser::Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let mut codegen = Codegen::new();
