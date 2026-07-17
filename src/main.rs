@@ -80,8 +80,6 @@ fn main() {
         eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
         process::exit(1);
     });
-    // TEMP
-    let tokens: Vec<lexer::Token> = spanned_tokens.iter().map(|st| st.token.clone()).collect();
 
     if std::env::var("DUMP_TOKENS").is_ok() {
         eprintln!("=== TOKENS ===");
@@ -91,9 +89,9 @@ fn main() {
     }
 
     // --- Stage 2: Parse ---
-    let mut parser = parser::Parser::new(tokens);
+    let mut parser = parser::Parser::new(spanned_tokens);
     let program = parser.parse_program().unwrap_or_else(|e| {
-        eprintln!("[ ERROR ] :: Parse error: {}", e);
+        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
         process::exit(1);
     });
 

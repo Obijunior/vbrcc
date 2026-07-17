@@ -1,45 +1,65 @@
-use crate::lexer::Token;
+use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
+use crate::diagnostic::{CompileError, Span};
 
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<SpannedToken>,
     pos: usize,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Parser { tokens, pos: 0 }
     }
 
     // --- Token navigation ---
 
     fn current(&self) -> &Token {
-        self.tokens.get(self.pos).unwrap_or(&Token::EOF)
+        self.tokens.get(self.pos).map(|st| &st.token).unwrap_or(&Token::EOF)
+    }
+
+    fn current_span(&self) -> Span {
+        self.tokens
+            .get(self.pos)
+            .map(|st| st.span)
+            .unwrap_or_else(|| self.tokens.last().map(|st| st.span).unwrap_or(Span::dummy()))
+    }
+
+    fn previous_span(&self) -> Span {
+        if self.pos == 0 {
+            Span::dummy()
+        } else {
+            self.tokens.get(self.pos - 1).map(|st| st.span).unwrap_or(Span::dummy())
+        }
     }
 
     fn advance(&mut self) -> &Token {
-        let tok = self.tokens.get(self.pos).unwrap_or(&Token::EOF);
+        let tok = self.tokens.get(self.pos).map(|st| &st.token).unwrap_or(&Token::EOF);
         self.pos += 1;
         tok
     }
 
     fn peek(&self) -> &Token {
-        self.tokens.get(self.pos + 1).unwrap_or(&Token::EOF)
+        self.tokens.get(self.pos + 1).map(|st| &st.token).unwrap_or(&Token::EOF)
     }
 
-    // make sure next token matches what we expect.
-    fn expect(&mut self, expected: &Token) -> Result<(), String> {
-        let tok = self.advance();
-        if tok == expected {
+    fn expect(&mut self, expected: &Token) -> Result<(), CompileError> {
+        let span = self.current_span();
+        let tok = self.advance().clone();
+        if tok == *expected {
             Ok(())
         } else {
-            Err(format!("[ ERROR ] :: Expected {:?}, got {:?}", expected, tok))
+            Err(CompileError::new(
+                format!("expected {}, found {}", expected.describe(), tok.describe()),
+                span,
+            )
+            .with_label(format!("expected {} here", expected.describe())))
         }
     }
 
     // --- Grammar rules ---
 
-    pub fn parse_program(&mut self) -> Result<Program, String> {
+    pub fn parse_program(&mut self) -> Result<Program, CompileError> {
         let mut functions = Vec::new();
         while self.current() != &Token::EOF {
             functions.push(self.parse_function()?);
@@ -47,7 +67,7 @@ impl Parser {
         Ok(Program { functions })
     }
 
-    fn parse_function(&mut self) -> Result<Function, String> {
+    fn parse_function(&mut self) -> Result<Function, CompileError> {
         // int for now
         self.expect(&Token::Int)?;
         let return_type = "int".to_string();
@@ -55,7 +75,12 @@ impl Parser {
         // function name
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
-            other => return Err(format!("[ ERROR ] :: Expected function name, got {:?}", other)),
+            other => {
+                return Err(CompileError::new(
+                    format!("expected function name, found {}", other.describe()),
+                    self.previous_span(),
+                ));
+            }
         };
 
         // () parse params
@@ -65,7 +90,12 @@ impl Parser {
             self.expect(&Token::Int)?;
             let new_param = match self.advance().clone() {
                 Token::Ident(s) => s,
-                other => return Err(format!("[ ERROR ] :: Expected param name, got {:?}", other)),
+                other => {
+                    return Err(CompileError::new(
+                        format!("expected parameter name, found {}", other.describe()),
+                        self.previous_span(),
+                    ));
+                }
             };
             params.push(new_param);
         }
@@ -82,7 +112,7 @@ impl Parser {
         Ok(Function { name, params, return_type, body })
     }
 
-    fn parse_statement(&mut self) -> Result<Stmt, String> {
+    fn parse_statement(&mut self) -> Result<Stmt, CompileError> {
         match self.current().clone() {
             Token::Return => {
                 self.advance(); // consume 'return'
@@ -111,11 +141,11 @@ impl Parser {
     //   3. unary - ~ !  (unary)
     //   4. literals, identifiers, ( expr )
 
-    fn parse_expr(&mut self) -> Result<Expr, String> {
+    fn parse_expr(&mut self) -> Result<Expr, CompileError> {
         self.parse_assignment()
     }
 
-    fn parse_assignment(&mut self) -> Result<Expr, String> {
+    fn parse_assignment(&mut self) -> Result<Expr, CompileError> {
         if let Token::Ident(name) = self.current().clone() {
             // i++ / i--
             if *self.peek() == Token::PlusPlus {
@@ -160,7 +190,7 @@ impl Parser {
         self.parse_logical_or()
     }
 
-    fn parse_logical_or(&mut self) -> Result<Expr, String> {
+    fn parse_logical_or(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_logical_and()?;
         loop {
             match self.current() {
@@ -175,7 +205,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_logical_and(&mut self) -> Result<Expr, String> {
+    fn parse_logical_and(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_comparison()?;
         loop {
             match self.current() {
@@ -190,7 +220,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr, String> {
+    fn parse_comparison(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_additive()?;
         loop {
             let op = match self.current() {
@@ -209,7 +239,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_additive(&mut self) -> Result<Expr, String> {
+    fn parse_additive(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_multiplicative()?;
         loop {
             let op = match self.current() {
@@ -224,7 +254,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_multiplicative(&mut self) -> Result<Expr, String> {
+    fn parse_multiplicative(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.current() {
@@ -240,7 +270,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_for(&mut self) -> Result<Stmt, String> {
+    fn parse_for(&mut self) -> Result<Stmt, CompileError> {
         self.advance(); // consume 'for'
         self.expect(&Token::LParen)?;
 
@@ -261,7 +291,7 @@ impl Parser {
         Ok(Stmt::For { init, cond, update, body })
     }
 
-    fn parse_while(&mut self) -> Result<Stmt, String> {
+    fn parse_while(&mut self) -> Result<Stmt, CompileError> {
         self.advance(); // consume 'while'
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
@@ -276,7 +306,7 @@ impl Parser {
         Ok(Stmt::While { cond, body })
     }
 
-    fn parse_if(&mut self) -> Result<Stmt, String> {
+    fn parse_if(&mut self) -> Result<Stmt, CompileError> {
         self.advance(); // consume 'if'
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
@@ -302,11 +332,16 @@ impl Parser {
         }
     }
 
-    fn parse_int(&mut self) -> Result<Stmt, String> {
+    fn parse_int(&mut self) -> Result<Stmt, CompileError> {
         self.advance(); // consume 'int'
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
-            other => return Err(format!("[ ERROR ] :: Expected variable name, got {:?}", other)),
+            other => {
+                return Err(CompileError::new(
+                    format!("expected variable name, found {}", other.describe()),
+                    self.previous_span(),
+                ));
+            }
         };
         let init = if self.current() == &Token::Equals {
             self.advance(); // consume '='
@@ -318,7 +353,7 @@ impl Parser {
         Ok(Stmt::VarDecl { name, init })
     }
 
-    fn parse_unary(&mut self) -> Result<Expr, String> {
+    fn parse_unary(&mut self) -> Result<Expr, CompileError> {
         let op = match self.current() {
             Token::Minus => Some(UnaryOp::Negate),
             Token::Tilde => Some(UnaryOp::BitNot),
@@ -334,7 +369,7 @@ impl Parser {
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, String> {
+    fn parse_primary(&mut self) -> Result<Expr, CompileError> {
         match self.advance().clone() {
             Token::IntLiteral(n) => Ok(Expr::IntLiteral(n)),
             Token::StringLiteral(s) => Ok(Expr::StringLiteral(s)),
@@ -360,27 +395,39 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
-            other => Err(format!("[ ERROR ] :: Unexpected token in expression: {:?}", other)),
+            other => {
+                Err(CompileError::new(
+                    format!("unexpected {} in expression", other.describe()),
+                    self.previous_span(),
+                ))
+            }
         }
     }
 }
 
 // --- Tests ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    // Attach dummy spans so tests can keep writing bare Token vectors.
+    fn parser(tokens: Vec<Token>) -> Parser {
+        use crate::lexer::SpannedToken;
+        use crate::diagnostic::Span;
+        let spanned = tokens.into_iter().map(|t| SpannedToken { token: t, span: Span::dummy() }).collect();
+        Parser::new(spanned)
+    }
 
     #[test]
     fn expect_reports_mismatch() {
-        let mut parser = Parser::new(vec![Token::Return, Token::EOF]);
-        let err = parser.expect(&Token::Int).unwrap_err();
-        assert_eq!(err, "[ ERROR ] :: Expected Int, got Return");
+        let mut p = parser(vec![Token::Return, Token::EOF]);
+        let err = p.expect(&Token::Int).unwrap_err();
+        assert_eq!(err.message, "expected `int`, found `return`");
     }
 
     #[test]
     fn parse_unary_negation_expression() {
-        let mut parser = Parser::new(vec![Token::Minus, Token::IntLiteral(7), Token::EOF]);
+        let mut parser = parser(vec![Token::Minus, Token::IntLiteral(7), Token::EOF]);
         let expr = parser.parse_unary().unwrap();
         assert_eq!(
             expr,
@@ -390,7 +437,7 @@ mod tests {
 
     #[test]
     fn parse_parenthesized_primary_expression() {
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::LParen,
             Token::IntLiteral(9),
             Token::RParen,
@@ -402,7 +449,7 @@ mod tests {
 
     #[test]
     fn parse_expression_statement() {
-        let mut parser = Parser::new(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
+        let mut parser = parser(vec![Token::IntLiteral(7), Token::Semicolon, Token::EOF]);
         let stmt = parser.parse_statement().unwrap();
         assert_eq!(stmt, Stmt::Expr(Expr::IntLiteral(7)));
     }
@@ -410,7 +457,7 @@ mod tests {
     #[test]
     fn parse_var_decl_with_init() {
         // int x = 5;
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Int, Token::Ident("x".into()), Token::Equals,
             Token::IntLiteral(5), Token::Semicolon, Token::EOF,
         ]);
@@ -424,7 +471,7 @@ mod tests {
     #[test]
     fn parse_var_decl_without_init() {
         // int x;
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Int, Token::Ident("x".into()), Token::Semicolon, Token::EOF,
         ]);
         let stmt = parser.parse_statement().unwrap();
@@ -437,7 +484,7 @@ mod tests {
     #[test]
     fn parse_assignment() {
         // x = 10;
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Ident("x".into()), Token::Equals,
             Token::IntLiteral(10), Token::Semicolon, Token::EOF,
         ]);
@@ -448,7 +495,7 @@ mod tests {
     #[test]
     fn parse_compound_assignment() {
         // x += 3;
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Ident("x".into()), Token::PlusEquals,
             Token::IntLiteral(3), Token::Semicolon, Token::EOF,
         ]);
@@ -466,7 +513,7 @@ mod tests {
     #[test]
     fn parse_post_increment() {
         // i++;
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Ident("i".into()), Token::PlusPlus, Token::Semicolon, Token::EOF,
         ]);
         let stmt = parser.parse_statement().unwrap();
@@ -483,7 +530,7 @@ mod tests {
     #[test]
     fn parse_comparison_less_than() {
         // i < 10 (as an expression)
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Ident("i".into()), Token::LessThan,
             Token::IntLiteral(10), Token::EOF,
         ]);
@@ -498,7 +545,7 @@ mod tests {
     #[test]
     fn parse_comparison_binds_looser_than_additive() {
         // i < 3 + 1 should parse as i < (3 + 1)
-        let mut parser = Parser::new(vec![
+        let mut parser = parser(vec![
             Token::Ident("i".into()), Token::LessThan,
             Token::IntLiteral(3), Token::Plus, Token::IntLiteral(1),
             Token::EOF,
@@ -513,5 +560,15 @@ mod tests {
                 Box::new(Expr::IntLiteral(1)),
             )),
         ));
+    }
+
+    #[test]
+    fn parse_error_points_at_offending_token() {
+        // `int main() { return 42 }` — missing semicolon; error should sit on `}`.
+        let mut lexer = crate::lexer::Lexer::new("int main() { return 42 }");
+        let toks = lexer.tokenize().unwrap();
+        let mut p = Parser::new(toks);
+        let err = p.parse_program().unwrap_err();
+        assert_eq!(err.span.start, 23); // offset of `}`
     }
 }
