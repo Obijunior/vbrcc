@@ -55,6 +55,8 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::CmpRegImm32 { .. } => 7,
         Instruction::AndRegReg { .. } => 3,
         Instruction::AndRegImm32 { .. } => 7,
+        Instruction::XorRegReg { .. } => 3,
+        Instruction::XorRegImm32 { .. } => 7,
         Instruction::ImulRegReg { .. } => 4,
         Instruction::ImulRegImm32 { .. } => 7,
         Instruction::PushReg { reg } => {
@@ -236,6 +238,22 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let r = rex(true, false, false, dst.ext());
             let m = modrm(0b11, dst.low3(), dst.low3()); // Opcode 0x69 is IMUL r64, r/m64, imm32
             let mut out = vec![r, 0x69, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
+        }
+
+        Instruction::XorRegReg { dst, src } => {
+            // Opcode 0x31 is XOR r/m64, r64
+            let r = rex(true, src.ext(), false, dst.ext());
+            let m = modrm(0b11, src.low3(), dst.low3());
+            vec![r, 0x31, m]
+        }
+
+        Instruction::XorRegImm32 { dst, imm } => {
+            // Opcode 0x81 /6 is XOR r/m64, imm32 (sign-extended)
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b110, dst.low3()); // /6 in reg field
+            let mut out = vec![r, 0x81, m];
             out.extend_from_slice(&imm.to_le_bytes());
             out
         }
@@ -706,4 +724,12 @@ mod tests {
         };
         assert_eq!(encode(&movzx).len(), encoded_len(&movzx));
     }
+
+    #[test]
+    fn encode_xor_rax_rax() {
+        let instr = Instruction::XorRegReg { dst: Register64::Rax, src: Register64::Rax };
+        assert_eq!(encode(&instr), vec![0x48, 0x31, 0xC0]);
+        assert_eq!(encoded_len(&instr), 3);
+    }
 }
+

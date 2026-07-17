@@ -4,7 +4,7 @@ use vbrcc::ast::*;
 
 fn parse(source: &str) -> Result<Program, String> {
     let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize();
+    let tokens = lexer.tokenize().unwrap().into_iter().map(|st| st.token).collect();
     let mut parser = Parser::new(tokens);
     parser.parse_program()
 }

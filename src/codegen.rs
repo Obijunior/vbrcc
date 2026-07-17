@@ -369,8 +369,8 @@ mod tests {
 
     fn compile(source: &str) -> String {
         let mut lexer = crate::lexer::Lexer::new(source);
-        let tokens = lexer.tokenize();
-        let mut parser = crate::parser::Parser::new(tokens);
+        let tokens = lexer.tokenize().unwrap().into_iter().map(|st| st.token).collect();
+        let mut parser = crate::parser::Parser::new(tokens); 
         let program = parser.parse_program().unwrap();
         let mut codegen = Codegen::new();
         codegen.generate(&program).unwrap()

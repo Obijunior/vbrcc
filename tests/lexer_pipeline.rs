@@ -1,10 +1,14 @@
 use vbrcc::lexer::{Lexer, Token};
 
+// Tokenize to bare Token kinds (spans stripped) for these assertions.
+fn lex(src: &str) -> Vec<Token> {
+    Lexer::new(src).tokenize().unwrap().into_iter().map(|st| st.token).collect()
+}
+
 #[test]
 fn basic_tokenize() {
     let source = "int main() { return 42; }";
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize();
+    let tokens = lex(source);
 
     assert_eq!(
         tokens,
@@ -26,8 +30,7 @@ fn basic_tokenize() {
 #[test]
 fn tokenize_for_loop_program() {
     let source = "int main() { int s = 0; for (int i = 0; i < 10; i++) { s += i; } return s; }";
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize();
+    let tokens = lex(source);
 
     assert_eq!(
         tokens,
