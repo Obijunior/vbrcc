@@ -24,7 +24,7 @@ Run the test suite with:
 cargo test
 ```
 
-## Compiler: C features
+## Compiler: C Features
 
 ### Expressions
 
@@ -33,12 +33,7 @@ cargo test
 | Integer literals | `42` |
 | String literals | `"hello\n"` |
 | Variables | `x`, `sum` |
-| Addition | `a + b` |
-| Subtraction | `a - b` |
-| Multiplication | `a * b` |
-| Division | `a / b` |
-| Modulo | `a % b` |
-| Negate | `-a` |
+| Arithmetic | `a + b`, `a - b`, `a * b`, `a / v`, `a % b`, `-a` |
 | Bitwise NOT | `~a` |
 | Logical NOT | `!a` |
 | Comparison | `<`, `<=`, `>`, `>=` |
@@ -46,25 +41,25 @@ cargo test
 | Compound assignment | `+=`, `-=`, `*=`, `/=`, `%=` |
 | Post-increment/decrement | `i++`, `i--` |
 | Function calls | `printf("hello")` |
-| Single line comment | `// this is a comment` |
 
-### Statements and control flow
+### Statements and Control Flow
 
 | Feature | Example |
-| --- | --- |
+| :--- | :--- |
 | Return | `return expr;` |
 | Variable declaration | `int x = 0;` |
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
-| If/else | `if (cond) { ... } else { ... }` |
-| Logical AND/OR | `&&`, `||` |
+| If/Else | `if (cond) { ... } else { ... }` |
+| Logical AND / OR | `&&`, `\|\|` |
+| Comments | `// single-line comment` |
 
 ### Not yet supported
 
-- Multiple types (all variables implicitly `int` for now)
-- Arrays, pointers, structs
-- `switch`, `do-while`, `break`, `continue`
-- Preprocessor directives (`#include`, `#define`)
+* Multiple types (all variables are implicitly `int` for now)
+* Arrays, pointers, and structs
+* `switch`, `do-while`, `break`, and `continue`
+* Preprocessor directives (`#include`, `#define`)
 
 ## Assembler: currently supported features
 
