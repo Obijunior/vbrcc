@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::diagnostic::Spanned;
+use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;
 
 pub struct Codegen {
@@ -52,7 +52,7 @@ impl Codegen {
         self.emit("  ret");
     }
 
-    pub fn generate(&mut self, program: &Program) -> Result<String, String> {
+    pub fn generate(&mut self, program: &Program) -> Result<String, CompileError> {
         // Reserve space for data section (filled in as we go)
         for function in &program.functions {
             self.gen_function(function)?;
@@ -74,7 +74,7 @@ impl Codegen {
     }
 
 
-    fn gen_function(&mut self, func: &Function) -> Result<(), String> {
+    fn gen_function(&mut self, func: &Function) -> Result<(), CompileError> {
         self.variables.clear();
         self.stack_offset = 0;
 
@@ -92,9 +92,9 @@ impl Codegen {
         let arg_regs = ["rcx", "rdx", "r8", "r9"];
         for (i, param) in func.params.iter().enumerate() {
             if i >= arg_regs.len() {
-                return Err(format!(
-                    "[ ERROR ] :: functions with more than {} parameters not supported",
-                    arg_regs.len()
+                return Err(CompileError::new(
+                    format!("functions with more than {} parameters are not supported", arg_regs.len()),
+                    func.span,
                 ));
             }
             self.stack_offset -= 8;
@@ -121,7 +121,7 @@ impl Codegen {
 
         Ok(())
     }
-    fn gen_statement(&mut self, stmt: &Spanned<Stmt>) -> Result<(), String> {
+    fn gen_statement(&mut self, stmt: &Spanned<Stmt>) -> Result<(), CompileError> {
         match &stmt.node {
             Stmt::Return(expr) => {
                 self.gen_expr(expr)?;
@@ -205,7 +205,7 @@ impl Codegen {
         Ok(())
     }
 
-    fn gen_expr(&mut self, expr: &Spanned<Expr>) -> Result<(), String> {
+    fn gen_expr(&mut self, expr: &Spanned<Expr>) -> Result<(), CompileError> {
         match &expr.node {
             Expr::IntLiteral(n) => {
                 // Move the literal directly into %rax
@@ -221,7 +221,10 @@ impl Codegen {
                 // Windows x64 calling convention: RCX, RDX, R8, R9
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
                 if args.len() > arg_regs.len() {
-                    return Err(format!("[ ERROR ] :: Function calls with more than {} arguments not supported", arg_regs.len()));
+                    return Err(CompileError::new(
+                        format!("function calls with more than {} arguments are not supported", arg_regs.len()),
+                        expr.span,
+                    ));
                 }
 
                 for (i, arg) in args.iter().enumerate() {
@@ -347,12 +350,17 @@ impl Codegen {
             }
             Expr::Assign(name, value) => {
                 self.gen_expr(value)?;
-                let offset = *self.variables.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
+                let offset = *self.variables.get(name).ok_or_else(|| {
+                    CompileError::new(format!("undefined variable `{name}`"), expr.span)
+                        .with_label("not found in this scope")
+                })?;
                 self.emit(&format!("  mov [rbp - {}], rax", -offset));
             }
-
             Expr::Var(name) => {
-                let offset = *self.variables.get(name).ok_or_else(|| format!("Undefined variable: {}", name))?;
+                let offset = *self.variables.get(name).ok_or_else(|| {
+                    CompileError::new(format!("undefined variable `{name}`"), expr.span)
+                        .with_label("not found in this scope")
+                })?;
                 self.emit(&format!("  mov rax, [rbp - {}]", -offset));
             }
         }
@@ -375,6 +383,23 @@ mod tests {
         let program = parser.parse_program().unwrap();
         let mut codegen = Codegen::new();
         codegen.generate(&program).unwrap()
+    }
+
+    fn compile_err(source: &str) -> crate::diagnostic::CompileError {
+        let mut lexer = crate::lexer::Lexer::new(source);
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let mut codegen = Codegen::new();
+        codegen.generate(&program).unwrap_err()
+    }
+
+    #[test]
+    fn undefined_variable_error_points_at_identifier() {
+        let src = "int main() { return y; }";
+        let err = compile_err(src);
+        assert!(err.message.contains('y'), "message: {}", err.message);
+        assert_eq!(err.span.start, src.find('y').unwrap()); // offset 20
     }
 
     #[test]

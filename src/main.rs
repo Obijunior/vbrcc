@@ -103,7 +103,7 @@ fn main() {
     // --- Stage 3: Codegen ---
     let mut codegen = codegen::Codegen::new();
     let asm = codegen.generate(&program).unwrap_or_else(|e| {
-        eprintln!("[ ERROR ] :: Codegen error: {}", e);
+        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
         process::exit(1);
     });
 
