@@ -80,6 +80,7 @@ The custom assembler (`src/assembler/` module) supports a small subset of Intel 
   - `jmp <label>`, `je <label>`, `jne <label>`, `jl <label>`, `jle <label>`, `jg <label>`, `jge <label>`
   - `lea <reg>, [rip + label]`
   - `call <label>`
+  - `xor <reg>, <reg|imm32>`
 
 ### Fun tests you can run
 
