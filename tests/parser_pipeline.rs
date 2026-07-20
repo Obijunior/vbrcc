@@ -19,8 +19,8 @@ fn parse_return_literal_program() {
     assert_eq!(program.functions.len(), 1);
     let f = &program.functions[0];
     assert_eq!(f.name, "main");
-    assert_eq!(f.params, Vec::<String>::new());
-    assert_eq!(f.return_type, "int");
+    assert_eq!(f.params, Vec::<(Type, String)>::new());
+    assert_eq!(f.return_type, Type::Int);
     assert_eq!(f.body, vec![s(Stmt::Return(e(Expr::IntLiteral(42))))]);
 }
 
@@ -69,7 +69,7 @@ fn parse_missing_semicolon_returns_error() {
 fn parse_var_decl_and_return() {
     let program = parse("int main() { int x = 5; return x; }").unwrap();
     let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::VarDecl { name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
+    assert_eq!(body[0], s(Stmt::VarDecl { ty: Type::Int, name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
     assert_eq!(body[1], s(Stmt::Return(e(Expr::Var("x".into())))));
 }
 
@@ -79,7 +79,7 @@ fn parse_for_loop() {
     let body = &program.functions[0].body;
     match &body[0].node {
         Stmt::For { init, cond, update, body } => {
-            assert_eq!(**init, s(Stmt::VarDecl { name: "i".into(), init: Some(e(Expr::IntLiteral(0))) }));
+            assert_eq!(**init, s(Stmt::VarDecl { ty: Type::Int, name: "i".into(), init: Some(e(Expr::IntLiteral(0))) }));
             assert_eq!(*cond, e(Expr::BinaryOp(
                 BinaryOp::Lt,
                 Box::new(e(Expr::Var("i".into()))),

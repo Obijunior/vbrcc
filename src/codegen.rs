@@ -90,7 +90,7 @@ impl Codegen {
         let outer = std::mem::take(&mut self.output);
 
         let arg_regs = ["rcx", "rdx", "r8", "r9"];
-        for (i, param) in func.params.iter().enumerate() {
+        for (i, (_ty, param)) in func.params.iter().enumerate() {
             if i >= arg_regs.len() {
                 return Err(CompileError::new(
                     format!("functions with more than {} parameters are not supported", arg_regs.len()),
@@ -150,7 +150,7 @@ impl Codegen {
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
             }
-            Stmt::VarDecl { name, init } => {
+            Stmt::VarDecl { name, init, .. } => {
                 self.stack_offset -= 8;
                 let offset = self.stack_offset;
                 self.variables.insert(name.clone(), offset);

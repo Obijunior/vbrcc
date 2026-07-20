@@ -67,11 +67,27 @@ impl Parser {
         Ok(Program { functions })
     }
 
+    fn parse_type(&mut self) -> Result<Type, CompileError> {
+        let span = self.current_span();
+        let ty = match self.advance().clone() {
+            Token::Int => Type::Int,
+            Token::Char => Type::Char,
+            Token::Long => Type::Long,
+            Token::Void => Type::Void,
+            other => {
+                return Err(CompileError::new(
+                    format!("expected a type, found {}", other.describe()),
+                    span,
+                )
+                .with_label("expected `int`, `char`, `long`, or `void`"));
+            }
+        };
+        Ok(ty)
+    }
+
     fn parse_function(&mut self) -> Result<Function, CompileError> {
         let start = self.current_span();
-        // int for now
-        self.expect(&Token::Int)?;
-        let return_type = "int".to_string();
+        let return_type = self.parse_type()?;
 
         // function name
         let name = match self.advance().clone() {
@@ -84,12 +100,11 @@ impl Parser {
             }
         };
 
-        // () parse params
         let mut params = Vec::new();
         self.expect(&Token::LParen)?;
         while self.current() != &Token::RParen {
-            self.expect(&Token::Int)?;
-            let new_param = match self.advance().clone() {
+            let ptype = self.parse_type()?;
+            let pname = match self.advance().clone() {
                 Token::Ident(s) => s,
                 other => {
                     return Err(CompileError::new(
@@ -98,7 +113,7 @@ impl Parser {
                     ));
                 }
             };
-            params.push(new_param);
+            params.push((ptype, pname));
         }
         self.expect(&Token::RParen)?;
 
@@ -122,7 +137,7 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Stmt::Return(expr)
             }
-            Token::Int => return self.parse_int(),
+            Token::Int | Token::Char | Token::Long | Token::Void => return self.parse_decl(),
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
             Token::If => return self.parse_if(),
@@ -343,9 +358,9 @@ impl Parser {
         Ok(Spanned::new(Stmt::If { cond, then_branch, else_branch }, start.to(self.previous_span())))
     }
 
-    fn parse_int(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+    fn parse_decl(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let start = self.current_span();
-        self.advance(); // 'int'
+        let ty = self.parse_type()?;
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -362,7 +377,7 @@ impl Parser {
             None
         };
         self.expect(&Token::Semicolon)?;
-        Ok(Spanned::new(Stmt::VarDecl { name, init }, start.to(self.previous_span())))
+        Ok(Spanned::new(Stmt::VarDecl { ty, name, init }, start.to(self.previous_span())))
     }
 
     fn parse_unary(&mut self) -> Result<TypedExpr, CompileError> {
@@ -466,7 +481,7 @@ mod tests {
             Token::IntLiteral(5), Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
-        assert_eq!(stmt, s(Stmt::VarDecl { name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
+        assert_eq!(stmt, s(Stmt::VarDecl { ty: Type::Int, name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
     }
 
     #[test]
@@ -475,7 +490,7 @@ mod tests {
             Token::Int, Token::Ident("x".into()), Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
-        assert_eq!(stmt, s(Stmt::VarDecl { name: "x".into(), init: None }));
+        assert_eq!(stmt, s(Stmt::VarDecl { ty: Type::Int, name: "x".into(), init: None }));
     }
 
     #[test]
@@ -550,5 +565,26 @@ mod tests {
                 Box::new(e(Expr::IntLiteral(1))),
             ))),
         )));
+    }
+
+        #[test]
+    fn parse_char_var_decl() {
+        let mut p = parser(vec![
+            Token::Char, Token::Ident("c".into()), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl { ty: Type::Char, name: "c".into(), init: None }));
+    }
+
+    #[test]
+    fn parse_long_var_decl_with_init() {
+        let mut p = parser(vec![
+            Token::Long, Token::Ident("n".into()), Token::Equals,
+            Token::IntLiteral(7), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Long, name: "n".into(), init: Some(e(Expr::IntLiteral(7))),
+        }));
     }
 }

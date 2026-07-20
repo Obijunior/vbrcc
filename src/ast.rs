@@ -70,7 +70,7 @@ pub enum BinaryOp {
 pub enum Stmt {
     Return(TypedExpr),
     Expr(TypedExpr),
-    VarDecl { name: String, init: Option<TypedExpr> },
+    VarDecl { ty: Type, name: String, init: Option<TypedExpr> },
     If {
         cond: TypedExpr,
         then_branch: Vec<Spanned<Stmt>>,
@@ -88,8 +88,8 @@ pub enum Stmt {
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
-    pub params: Vec<String>,
-    pub return_type: String,
+    pub params: Vec<(Type, String)>,
+    pub return_type: Type,
     pub body: Vec<Spanned<Stmt>>,
     pub span: Span,
 }

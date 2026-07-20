@@ -9,8 +9,13 @@ pub enum Token {
     // Register(String), <-- commenting to keep the warnings quiet
     Ident(String),
 
-    // keywords
+    // types
     Int,
+    Char,
+    Long,
+    Void,
+
+    // keywords
     Return,
     For,
     While,
@@ -68,6 +73,9 @@ impl Token {
             Token::StringLiteral(_) => "string literal".to_string(),
             Token::Ident(_) => "identifier".to_string(),
             Token::Int => "`int`".to_string(),
+            Token::Char => "`char`".to_string(),
+            Token::Long => "`long`".to_string(),
+            Token::Void => "`void`".to_string(),
             Token::Return => "`return`".to_string(),
             Token::For => "`for`".to_string(),
             Token::While => "`while`".to_string(),
@@ -190,6 +198,9 @@ impl Lexer {
         }
         match ident.as_str() {
             "int" => Token::Int,
+            "char" => Token::Char,
+            "long" => Token::Long,
+            "void" => Token::Void,
             "return" => Token::Return,
             "for" => Token::For,
             "while" => Token::While,
