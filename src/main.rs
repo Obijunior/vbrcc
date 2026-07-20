@@ -46,10 +46,42 @@ fn enable_ansi() {
 }
 
 
+fn print_version() {
+    println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+}
+
+fn print_help() {
+    println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    println!("{}", env!("CARGO_PKG_DESCRIPTION"));
+    println!();
+    println!("USAGE:");
+    println!("    vbrcc <input.c> [OPTIONS]");
+    println!();
+    println!("OPTIONS:");
+    println!("    -o <output>        Set the output path (default: input with no extension)");
+    println!("    --gcc              Assemble and link using the system gcc");
+    println!("    --lld-link         Link using lld-link");
+    println!("    --keep-artifacts   Keep intermediate .s / .obj files");
+    println!("    -h, --help         Print this help message");
+    println!("    -v, --version      Print version information");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Handle informational flags before treating args[1] as an input file.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print_help();
+        return;
+    }
+    if args.iter().any(|a| a == "-v" || a == "--version") {
+        print_version();
+        return;
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: {} <input.c> [-o <output>] [-gcc] [-lld-link] [--keep-artifacts]", args[0]);
+        eprintln!("Usage: {} <input.c> [-o <output>] [--gcc] [--lld-link] [--keep-artifacts]", args[0]);
+        eprintln!("Try '{} --help' for more information.", args[0]);
         process::exit(1);
     }
 
