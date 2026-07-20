@@ -143,11 +143,11 @@ impl Parser {
     //   3. unary - ~ !  (unary)
     //   4. literals, identifiers, ( expr )
 
-    fn parse_expr(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_expr(&mut self) -> Result<TypedExpr, CompileError> {
         self.parse_assignment()
     }
 
-    fn parse_assignment(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_assignment(&mut self) -> Result<TypedExpr, CompileError> {
         if let Token::Ident(name) = self.current().clone() {
             let start = self.current_span();
             // i++ / i--
@@ -155,19 +155,19 @@ impl Parser {
                 self.advance();
                 self.advance();
                 let span = start.to(self.previous_span());
-                let var = Spanned::new(Expr::Var(name.clone()), span);
-                let one = Spanned::new(Expr::IntLiteral(1), span);
-                let sum = Spanned::new(Expr::BinaryOp(BinaryOp::Add, Box::new(var), Box::new(one)), span);
-                return Ok(Spanned::new(Expr::Assign(name, Box::new(sum)), span));
+                let var = TypedExpr::new(Expr::Var(name.clone()), span);
+                let one = TypedExpr::new(Expr::IntLiteral(1), span);
+                let sum = TypedExpr::new(Expr::BinaryOp(BinaryOp::Add, Box::new(var), Box::new(one)), span);
+                return Ok(TypedExpr::new(Expr::Assign(name, Box::new(sum)), span));
             }
             if *self.peek() == Token::MinusMinus {
                 self.advance();
                 self.advance();
                 let span = start.to(self.previous_span());
-                let var = Spanned::new(Expr::Var(name.clone()), span);
-                let one = Spanned::new(Expr::IntLiteral(1), span);
-                let diff = Spanned::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(var), Box::new(one)), span);
-                return Ok(Spanned::new(Expr::Assign(name, Box::new(diff)), span));
+                let var = TypedExpr::new(Expr::Var(name.clone()), span);
+                let one = TypedExpr::new(Expr::IntLiteral(1), span);
+                let diff = TypedExpr::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(var), Box::new(one)), span);
+                return Ok(TypedExpr::new(Expr::Assign(name, Box::new(diff)), span));
             }
 
             let assign_op = match self.peek() {
@@ -185,40 +185,40 @@ impl Parser {
             let span = start.to(self.previous_span());
 
             return Ok(match assign_op {
-                None => Spanned::new(Expr::Assign(name, Box::new(rhs)), span),
+                None => TypedExpr::new(Expr::Assign(name, Box::new(rhs)), span),
                 Some(op) => {
-                    let var = Spanned::new(Expr::Var(name.clone()), span);
-                    let combined = Spanned::new(Expr::BinaryOp(op, Box::new(var), Box::new(rhs)), span);
-                    Spanned::new(Expr::Assign(name, Box::new(combined)), span)
+                    let var = TypedExpr::new(Expr::Var(name.clone()), span);
+                    let combined = TypedExpr::new(Expr::BinaryOp(op, Box::new(var), Box::new(rhs)), span);
+                    TypedExpr::new(Expr::Assign(name, Box::new(combined)), span)
                 }
             });
         }
         self.parse_logical_or()
     }
 
-    fn parse_logical_or(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_logical_or(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_logical_and()?;
         while let Token::LogicalOr = self.current() {
             self.advance();
             let right = self.parse_logical_and()?;
             let span = left.span.to(right.span);
-            left = Spanned::new(Expr::BinaryOp(BinaryOp::LogicalOr, Box::new(left), Box::new(right)), span);
+            left = TypedExpr::new(Expr::BinaryOp(BinaryOp::LogicalOr, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_logical_and(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_logical_and(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_comparison()?;
         while let Token::LogicalAnd = self.current() {
             self.advance();
             let right = self.parse_comparison()?;
             let span = left.span.to(right.span);
-            left = Spanned::new(Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right)), span);
+            left = TypedExpr::new(Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_comparison(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_additive()?;
         loop {
             let op = match self.current() {
@@ -233,12 +233,12 @@ impl Parser {
             self.advance();
             let right = self.parse_additive()?;
             let span = left.span.to(right.span);
-            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
+            left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_additive(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_additive(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_multiplicative()?;
         loop {
             let op = match self.current() {
@@ -249,12 +249,12 @@ impl Parser {
             self.advance();
             let right = self.parse_multiplicative()?;
             let span = left.span.to(right.span);
-            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
+            left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_multiplicative(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_multiplicative(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.current() {
@@ -266,7 +266,7 @@ impl Parser {
             self.advance();
             let right = self.parse_unary()?;
             let span = left.span.to(right.span);
-            left = Spanned::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
+            left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
@@ -365,7 +365,7 @@ impl Parser {
         Ok(Spanned::new(Stmt::VarDecl { name, init }, start.to(self.previous_span())))
     }
 
-    fn parse_unary(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_unary(&mut self) -> Result<TypedExpr, CompileError> {
         let start = self.current_span();
         let op = match self.current() {
             Token::Minus => Some(UnaryOp::Negate),
@@ -377,13 +377,13 @@ impl Parser {
             self.advance();
             let operand = self.parse_unary()?;
             let span = start.to(self.previous_span());
-            Ok(Spanned::new(Expr::UnaryOp(op, Box::new(operand)), span))
+            Ok(TypedExpr::new(Expr::UnaryOp(op, Box::new(operand)), span))
         } else {
             self.parse_primary()
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Spanned<Expr>, CompileError> {
+    fn parse_primary(&mut self) -> Result<TypedExpr, CompileError> {
         let start = self.current_span();
         let node = match self.advance().clone() {
             Token::IntLiteral(n) => Expr::IntLiteral(n),
@@ -408,7 +408,7 @@ impl Parser {
                 let inner = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 // Re-span the parenthesized expression to include the parens.
-                return Ok(Spanned::new(inner.node, start.to(self.previous_span())));
+                return Ok(TypedExpr::new(inner.node, start.to(self.previous_span())));
             }
             other => {
                 return Err(CompileError::new(
@@ -417,7 +417,7 @@ impl Parser {
                 ));
             }
         };
-        Ok(Spanned::new(node, start.to(self.previous_span())))
+        Ok(TypedExpr::new(node, start.to(self.previous_span())))
     }
 }
 
@@ -435,7 +435,7 @@ mod tests {
     }
 
     use crate::diagnostic::{Span, Spanned};
-    fn e(x: Expr) -> Spanned<Expr> { Spanned::new(x, Span::dummy()) }
+    fn e(x: Expr) -> TypedExpr { TypedExpr::new(x, Span::dummy()) }
     fn s(x: Stmt) -> Spanned<Stmt> { Spanned::new(x, Span::dummy()) }
 
     #[test]

@@ -10,7 +10,7 @@ fn parse(source: &str) -> Result<Program, String> {
     parser.parse_program().map_err(|e| e.message)
 }
 
-fn e(x: Expr) -> Spanned<Expr> { Spanned::new(x, Span::dummy()) }
+fn e(x: Expr) -> TypedExpr { TypedExpr::new(x, Span::dummy()) }
 fn s(x: Stmt) -> Spanned<Stmt> { Spanned::new(x, Span::dummy()) }
 
 #[test]

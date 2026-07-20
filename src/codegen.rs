@@ -205,7 +205,7 @@ impl Codegen {
         Ok(())
     }
 
-    fn gen_expr(&mut self, expr: &Spanned<Expr>) -> Result<(), CompileError> {
+    fn gen_expr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::IntLiteral(n) => {
                 // Move the literal directly into %rax

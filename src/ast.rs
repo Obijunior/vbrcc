@@ -28,48 +28,58 @@ impl Type {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedExpr {
+    pub node: Expr,
+    pub span: Span,
+    pub ty: Type,
+}
+
+impl TypedExpr {
+    pub fn new(node: Expr, span: Span) -> Self {
+        TypedExpr { node, span, ty: Type::Unknown }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     IntLiteral(i64),
     StringLiteral(String),
-    UnaryOp(UnaryOp, Box<Spanned<Expr>>),
-    BinaryOp(BinaryOp, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Var(String),
-    FunctionCall {
-        name: String,
-        args: Vec<Spanned<Expr>>,
-    },
-    Assign(String, Box<Spanned<Expr>>), // name = value
+    UnaryOp(UnaryOp, Box<TypedExpr>),
+    BinaryOp(BinaryOp, Box<TypedExpr>, Box<TypedExpr>),
+    Var(String), 
+    FunctionCall { name: String, args: Vec<TypedExpr> },
+    Assign(String, Box<TypedExpr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Negate, // -
     BitNot, // ~
     LogNot, // !
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add, Sub, Mul, Div, Mod,
     Lt, Lte, Gt, Gte, Eq, Neq,
     LogicalAnd, LogicalOr,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Return(Spanned<Expr>),
-    Expr(Spanned<Expr>),
-    VarDecl { name: String, init: Option<Spanned<Expr>> },
+    Return(TypedExpr),
+    Expr(TypedExpr),
+    VarDecl { name: String, init: Option<TypedExpr> },
     If {
-        cond: Spanned<Expr>,
+        cond: TypedExpr,
         then_branch: Vec<Spanned<Stmt>>,
         else_branch: Vec<Spanned<Stmt>>,
     },
-    While { cond: Spanned<Expr>, body: Vec<Spanned<Stmt>> },
+    While { cond: TypedExpr, body: Vec<Spanned<Stmt>> },
     For {
         init: Box<Spanned<Stmt>>,
-        cond: Spanned<Expr>,
+        cond: TypedExpr,
         update: Box<Spanned<Stmt>>,
         body: Vec<Spanned<Stmt>>,
     },
