@@ -1,7 +1,7 @@
 # VBRCC - Very Basic Rust C Compiler
 
 [![Crates.io](https://img.shields.io/crates/v/vbrcc.svg)](https://crates.io/crates/vbrcc)
-[![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/<user>/<repo>/actions/workflows/ci.yml)
+[![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 <!-- [![Downloads](https://img.shields.io/crates/d/vbrcc.svg)](https://crates.io/crates/vbrcc) -->
 
@@ -11,7 +11,13 @@ A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 
 ```sh
 vbrcc <input.c> [-o <output_file>] [--lld-link/--gcc] [--keep-artifacts]
+vbrcc --version    # or -v
+vbrcc --help       # or -h
 ```
+
+The compiler reads one C file. It writes an assembly file and an executable. Use
+`-o` to set the output path. Use `--version` to print the version. Use `--help`
+to print the option list.
 
 | Flag | Pipeline | External dependencies |
 |---|---|---|
@@ -46,13 +52,32 @@ cargo test
 | Compound assignment | `+=`, `-=`, `*=`, `/=`, `%=` |
 | Post-increment/decrement | `i++`, `i--` |
 | Function calls | `printf("hello")` |
+| Address-of / dereference | `&x`, `*p` |
+| Array index | `a[i]` |
+| Cast | `(char)x`, `(int *)p` |
+
+### Types
+
+The compiler has a type checker. The type checker runs after the parser and
+before the code generator. It gives a type to each expression. It reports a type
+error with a source location, for example a dereference of a non-pointer value.
+
+| Feature | Example |
+| --- | --- |
+| Integer types | `int`, `char`, `long` |
+| Void type | `void`, `void *` |
+| Pointers | `int *p`, `int **pp` |
+| Arrays | `int a[10]` |
+
+Note: the compiler uses loose sizing at present. Every scalar and every pointer is
+8 bytes. True widths (`char` = 1, `int` = 4) are a planned phase.
 
 ### Statements and Control Flow
 
 | Feature | Example |
 | :--- | :--- |
 | Return | `return expr;` |
-| Variable declaration | `int x = 0;` |
+| Variable declaration | `int x = 0;`, `char c;`, `int *p;`, `int a[10];` |
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
 | If/Else | `if (cond) { ... } else { ... }` |
@@ -61,9 +86,10 @@ cargo test
 
 ### Not yet supported
 
-* Multiple types (all variables are implicitly `int` for now)
-* Arrays, pointers, and structs
+* `struct`, `union`, `enum`, and `typedef`
+* `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
+* Block-level scope (variables use one flat scope)
 * Preprocessor directives (`#include`, `#define`)
 
 ## Assembler: currently supported features
@@ -83,7 +109,7 @@ The custom assembler (`src/assembler/` module) supports a small subset of Intel 
   - `and <reg>, <reg|imm32>`, `cmp <reg>, <reg|imm32>`
   - `sete`, `setne`, `setl`, `setle`, `setg`, `setge` (8-bit register operand)
   - `jmp <label>`, `je <label>`, `jne <label>`, `jl <label>`, `jle <label>`, `jg <label>`, `jge <label>`
-  - `lea <reg>, [rip + label]`
+  - `lea <reg>, [rip + label]` / `lea <reg>, [reg +/- disp]`
   - `call <label>`
   - `xor <reg>, <reg|imm32>`
 
@@ -102,15 +128,30 @@ The assembler supports two output modes:
 - **PE executable** (default): Encodes instructions into raw machine bytes and produces a complete Windows PE32+ executable with DOS header, COFF header, section table, and import table. External calls (e.g., `printf`) are resolved via IAT.
 - **COFF `.obj`** (`--coff` flag): Emits a relocatable COFF object file with symbol table and `IMAGE_REL_AMD64_REL32` relocations for cross-section and external references. Designed to be linked by `lld-link`.
 
+## Architecture
+
+Read [docs/architecture.md](docs/architecture.md) to learn how the stages fit
+together.
+
 ## Contributing / next steps
 - C99 compliance
 - Emit ELF64 output (currently Windows PE/COFF only).
 - Write a custom linker to replace `lld-link` dependency.
 
 ## Roadmap to C99
-- add support for types
-- add support for pointers
-- support for more C functionality: switch statements, break/continue, do while ...
+
+Done:
+- Multiple integer types (`int`, `char`, `long`) and `void`
+- A type checker with source-located type errors
+- Pointers, address-of, dereference, and pointer arithmetic
+- Arrays and array indexing
+- Cast expressions
+
+Next:
+- True type widths (`char` = 1, `int` = 4)
+- `struct`, `union`, `enum`, and `typedef`
+- More control flow: `switch`, `do-while`, `break`, `continue`
+- Preprocessor: `#include`, `#define`
 
 ## License
 
