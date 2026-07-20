@@ -26,6 +26,33 @@ impl Type {
             _ => 8,
         }
     }
+    /// Array-to-pointer decay: an array used as a value becomes a pointer to its element.
+    pub fn decay(&self) -> Type {
+        match self {
+            Type::Array(elem, _) => Type::Pointer(elem.clone()),
+            other => other.clone(),
+        }
+    }
+
+    /// The pointed-to type, after decay. `int*` -> `int`, `int[10]` -> `int`.
+    pub fn pointee(&self) -> Option<Type> {
+        match self.decay() {
+            Type::Pointer(t) => Some(*t),
+            _ => None,
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Type::Int => "int".to_string(),
+            Type::Char => "char".to_string(),
+            Type::Long => "long".to_string(),
+            Type::Void => "void".to_string(),
+            Type::Pointer(t) => format!("{}*", t.describe()),
+            Type::Array(t, n) => format!("{}[{}]", t.describe(), n),
+            Type::Unknown => "<unknown>".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

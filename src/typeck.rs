@@ -1,33 +1,33 @@
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 pub fn check(program: &mut Program) -> Result<(), CompileError> {
     for func in &mut program.functions {
-        let mut scope: HashSet<String> = HashSet::new();
-        for (_ty, name) in &func.params {
-            scope.insert(name.clone());
+        let mut scope: HashMap<String, Type> = HashMap::new();
+        for (ty, name) in &func.params {
+            scope.insert(name.clone(), ty.clone());
         }
         check_block(&mut func.body, &mut scope)?;
     }
     Ok(())
 }
 
-fn check_block(stmts: &mut [Spanned<Stmt>], scope: &mut HashSet<String>) -> Result<(), CompileError> {
+fn check_block(stmts: &mut [Spanned<Stmt>], scope: &mut HashMap<String, Type>) -> Result<(), CompileError> {
     for stmt in stmts {
         check_stmt(&mut stmt.node, scope)?;
     }
     Ok(())
 }
 
-fn check_stmt(stmt: &mut Stmt, scope: &mut HashSet<String>) -> Result<(), CompileError> {
+fn check_stmt(stmt: &mut Stmt, scope: &mut HashMap<String, Type>) -> Result<(), CompileError> {
     match stmt {
         Stmt::Return(e) | Stmt::Expr(e) => check_expr(e, scope)?,
-        Stmt::VarDecl { name, init, .. } => {
+        Stmt::VarDecl { ty, name, init } => {
             if let Some(e) = init {
                 check_expr(e, scope)?;
             }
-            scope.insert(name.clone());
+            scope.insert(name.clone(), ty.clone());
         }
         Stmt::If { cond, then_branch, else_branch } => {
             check_expr(cond, scope)?;
@@ -48,41 +48,98 @@ fn check_stmt(stmt: &mut Stmt, scope: &mut HashSet<String>) -> Result<(), Compil
     Ok(())
 }
 
-fn check_expr(expr: &mut TypedExpr, scope: &mut HashSet<String>) -> Result<(), CompileError> {
+fn is_lvalue(e: &Expr) -> bool {
+    matches!(e, Expr::Var(_) | Expr::Deref(_) | Expr::Index(_, _))
+}
+
+fn check_expr(expr: &mut TypedExpr, scope: &mut HashMap<String, Type>) -> Result<(), CompileError> {
     let span = expr.span;
-    match &mut expr.node {
-        Expr::IntLiteral(_) | Expr::StringLiteral(_) => {}
-        Expr::Var(name) => {
-            if !scope.contains(name) {
-                return Err(CompileError::new(format!("undefined variable `{name}`"), span)
-                    .with_label("not found in this scope"));
-            }
+    let ty: Type = match &mut expr.node {
+        Expr::IntLiteral(_) => Type::Int,
+        Expr::StringLiteral(_) => Type::Pointer(Box::new(Type::Char)),
+        Expr::Var(name) => scope.get(name).cloned().ok_or_else(|| {
+            CompileError::new(format!("undefined variable `{name}`"), span)
+                .with_label("not found in this scope")
+        })?,
+        Expr::UnaryOp(_, inner) => {
+            check_expr(inner, scope)?;
+            Type::Int
         }
-        Expr::UnaryOp(_, inner) => check_expr(inner, scope)?,
-        Expr::BinaryOp(_, l, r) => {
+        Expr::BinaryOp(op, l, r) => {
             check_expr(l, scope)?;
             check_expr(r, scope)?;
+            let lt = l.ty.decay();
+            if matches!(lt, Type::Pointer(_)) && matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+                lt
+            } else {
+                Type::Int
+            }
         }
-        Expr::Assign(lval, rhs) => {
-            check_expr(lval, scope)?;
-            check_expr(rhs, scope)?;
-        }
-        Expr::AddressOf(inner) | Expr::Deref(inner) | Expr::Cast(_, inner) => {
+        Expr::AddressOf(inner) => {
             check_expr(inner, scope)?;
+            if !is_lvalue(&inner.node) {
+                return Err(CompileError::new("cannot take the address of this expression", span)
+                    .with_label("not an lvalue"));
+            }
+            Type::Pointer(Box::new(inner.ty.clone()))
+        }
+        Expr::Deref(inner) => {
+            check_expr(inner, scope)?;
+            match inner.ty.pointee() {
+                Some(t) => t,
+                None => {
+                    return Err(CompileError::new(
+                        format!("cannot dereference value of type `{}`", inner.ty.describe()),
+                        span,
+                    )
+                    .with_label("expected a pointer"));
+                }
+            }
         }
         Expr::Index(base, idx) => {
             check_expr(base, scope)?;
             check_expr(idx, scope)?;
+            match base.ty.pointee() {
+                Some(t) => t,
+                None => {
+                    return Err(CompileError::new(
+                        format!("cannot index value of type `{}`", base.ty.describe()),
+                        span,
+                    )
+                    .with_label("expected a pointer or array"));
+                }
+            }
+        }
+        Expr::Cast(t, inner) => {
+            check_expr(inner, scope)?;
+            t.clone()
+        }
+        Expr::Assign(lval, rhs) => {
+            check_expr(lval, scope)?;
+            check_expr(rhs, scope)?;
+            if !is_lvalue(&lval.node) {
+                return Err(CompileError::new("cannot assign to this expression", span)
+                    .with_label("not an lvalue"));
+            }
+            lval.ty.clone()
         }
         Expr::FunctionCall { args, .. } => {
             for a in args {
                 check_expr(a, scope)?;
             }
+            Type::Int
         }
-    }
-    expr.ty = Type::Int;
+    };
+    expr.ty = ty;
     Ok(())
 }
+
+
+/* ===================================== */
+//                                       //
+//        Unit tests for type checker    //
+//                                       // 
+/* ===================================== */
 
 #[cfg(test)]
 mod tests {
@@ -113,5 +170,35 @@ mod tests {
         let err = typecheck(src).unwrap_err();
         assert!(err.message.contains('y'), "message: {}", err.message);
         assert_eq!(err.span.start, src.find('y').unwrap());
+    }
+
+        #[test]
+    fn address_of_yields_pointer() {
+        let program = typecheck("int main() { int x = 1; int *p = &x; return 0; }").unwrap();
+        // the initializer `&x` on body[1] is a pointer-to-int
+        if let Stmt::VarDecl { init: Some(e), .. } = &program.functions[0].body[1].node {
+            assert_eq!(e.ty, Type::Pointer(Box::new(Type::Int)));
+        } else { panic!("expected var decl with init"); }
+    }
+
+    #[test]
+    fn deref_of_non_pointer_is_error() {
+        let src = "int main() { int x = 1; return *x; }";
+        let err = typecheck(src).unwrap_err();
+        assert!(err.message.contains("dereference"), "message: {}", err.message);
+    }
+
+    #[test]
+    fn index_of_non_pointer_is_error() {
+        let src = "int main() { int x = 1; return x[0]; }";
+        let err = typecheck(src).unwrap_err();
+        assert!(err.message.contains("index"), "message: {}", err.message);
+    }
+
+    #[test]
+    fn assign_to_non_lvalue_is_error() {
+        let src = "int main() { 1 = 2; return 0; }";
+        let err = typecheck(src).unwrap_err();
+        assert!(err.message.contains("assign"), "message: {}", err.message);
     }
 }
