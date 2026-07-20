@@ -25,6 +25,7 @@ mod codegen;
 mod assembler;
 mod assembler_driver;
 mod diagnostic;
+mod typeck;
 
 #[cfg(windows)]
 fn enable_ansi() {
@@ -122,7 +123,7 @@ fn main() {
 
     // --- Stage 2: Parse ---
     let mut parser = parser::Parser::new(spanned_tokens);
-    let program = parser.parse_program().unwrap_or_else(|e| {
+    let mut program = parser.parse_program().unwrap_or_else(|e| {
         eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
         process::exit(1);
     });
@@ -131,6 +132,12 @@ fn main() {
         eprintln!("=== AST ===");
         eprintln!("{:#?}", program);
     }
+
+    // --- Stage 2.5: Type check ---
+    typeck::check(&mut program).unwrap_or_else(|e| {
+        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        process::exit(1);
+    });
 
     // --- Stage 3: Codegen ---
     let mut codegen = codegen::Codegen::new();
