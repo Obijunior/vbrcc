@@ -43,6 +43,7 @@ pub enum Instruction {
     PopReg { reg: Register64 },
 
     LeaRegLabel { dst: Register64, label: String },
+    LeaRegMemDisp { dst: Register64, base: Register64, disp: i32 },
     CallLabel { label: String },
 
     SeteReg8 { reg: Register8 },
@@ -324,6 +325,13 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             }
             let dst = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+
+            // Try `[base +/- disp]` first (e.g. lea rax, [rbp - 8]).
+            if let Some((base, disp)) = parse_mem_operand(operands[1]) {
+                return Ok(AsmLine::Instruction(Instruction::LeaRegMemDisp { dst, base, disp }));
+            }
+            
+            // Otherwise fall back to `[rip + label]` / `[label]`.
             let src = operands[1].trim();
             if !(src.starts_with('[') && src.ends_with(']')) {
                 return Err(format!("[ ERROR ] :: lea expects [label] operand: {}", raw));
@@ -401,6 +409,7 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
     }
 }
+
 
 /*********************************
 *           UNIT TESTS           *
@@ -544,6 +553,18 @@ mod tests {
         match parse_intel_line("if_1_end:").unwrap() {
             AsmLine::Label(name) => assert_eq!(name, "if_1_end"),
             other => panic!("expected Label, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_lea_reg_mem_disp() {
+        match parse_intel_line("  lea rax, [rbp - 8]").unwrap() {
+            AsmLine::Instruction(Instruction::LeaRegMemDisp { dst, base, disp }) => {
+                assert_eq!(dst.low3(), 0);   // rax
+                assert_eq!(base.low3(), 5);  // rbp
+                assert_eq!(disp, -8);
+            }
+            other => panic!("expected LeaRegMemDisp, got {:?}", other),
         }
     }
 }

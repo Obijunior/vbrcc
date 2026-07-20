@@ -77,6 +77,7 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::NotReg { .. } => 3,
         Instruction::IdivReg { .. } => 3,
         Instruction::LeaRegLabel { .. } => 7,
+        Instruction::LeaRegMemDisp { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
         Instruction::CallLabel { .. } => 5,
 
         Instruction::SeteReg8 { .. } => 3,
@@ -163,6 +164,14 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let r = rex(true, dst.ext(), false, src.ext());
             let m = modrm(0b11, dst.low3(), src.low3());
             vec![r, 0x0F, 0xB6, m]
+        }
+
+        Instruction::LeaRegMemDisp { dst, base, disp } => {
+            // REX.W + 8D /r is LEA r64, m
+            let r = rex(true, dst.ext(), false, base.ext());
+            let mut out = vec![r, 0x8D];
+            out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
+            out            
         }
 
         Instruction::AddRegReg { dst, src } => {
@@ -558,8 +567,9 @@ pub fn encode_for_obj(
     }
 }
 
+
 /*********************************
-*           UNIT TESTS           *
+*     UNIT TESTS FOR ENCODER     *
 **********************************/
 
 #[cfg(test)]
@@ -730,6 +740,15 @@ mod tests {
         let instr = Instruction::XorRegReg { dst: Register64::Rax, src: Register64::Rax };
         assert_eq!(encode(&instr), vec![0x48, 0x31, 0xC0]);
         assert_eq!(encoded_len(&instr), 3);
+    }
+
+    #[test]
+    fn encode_lea_rax_rbp_minus_8() {
+        use crate::assembler::register::Register64;
+        let instr = Instruction::LeaRegMemDisp { dst: Register64::Rax, base: Register64::Rbp, disp: -8 };
+        // REX.W=0x48, 0x8D, modrm(mod=01, reg=rax=000, rm=rbp=101)=0x45, disp8=0xF8
+        assert_eq!(encode(&instr), vec![0x48, 0x8D, 0x45, 0xF8]);
+        assert_eq!(encoded_len(&instr), 4);
     }
 }
 
