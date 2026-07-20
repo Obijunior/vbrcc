@@ -49,7 +49,11 @@ pub enum Expr {
     BinaryOp(BinaryOp, Box<TypedExpr>, Box<TypedExpr>),
     Var(String), 
     FunctionCall { name: String, args: Vec<TypedExpr> },
-    Assign(String, Box<TypedExpr>),
+    Assign(Box<TypedExpr>, Box<TypedExpr>), // lvalue = value
+    AddressOf(Box<TypedExpr>),              // &expr
+    Deref(Box<TypedExpr>),                  // *expr
+    Index(Box<TypedExpr>, Box<TypedExpr>),  // base[idx]
+    Cast(Type, Box<TypedExpr>),             // (T)expr
 }
 
 #[derive(Debug, Clone, PartialEq)]

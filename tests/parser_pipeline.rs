@@ -133,7 +133,7 @@ fn parse_compound_assignment_in_program() {
     let program = parse("int main() { int x = 0; x += 5; return x; }").unwrap();
     let body = &program.functions[0].body;
     assert_eq!(body[1], s(Stmt::Expr(e(Expr::Assign(
-        "x".into(),
+        Box::new(e(Expr::Var("x".into()))),
         Box::new(e(Expr::BinaryOp(
             BinaryOp::Add,
             Box::new(e(Expr::Var("x".into()))),

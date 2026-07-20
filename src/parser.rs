@@ -171,52 +171,40 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Result<TypedExpr, CompileError> {
-        if let Token::Ident(name) = self.current().clone() {
-            let start = self.current_span();
-            // i++ / i--
-            if *self.peek() == Token::PlusPlus {
-                self.advance();
-                self.advance();
-                let span = start.to(self.previous_span());
-                let var = TypedExpr::new(Expr::Var(name.clone()), span);
-                let one = TypedExpr::new(Expr::IntLiteral(1), span);
-                let sum = TypedExpr::new(Expr::BinaryOp(BinaryOp::Add, Box::new(var), Box::new(one)), span);
-                return Ok(TypedExpr::new(Expr::Assign(name, Box::new(sum)), span));
-            }
-            if *self.peek() == Token::MinusMinus {
-                self.advance();
-                self.advance();
-                let span = start.to(self.previous_span());
-                let var = TypedExpr::new(Expr::Var(name.clone()), span);
-                let one = TypedExpr::new(Expr::IntLiteral(1), span);
-                let diff = TypedExpr::new(Expr::BinaryOp(BinaryOp::Sub, Box::new(var), Box::new(one)), span);
-                return Ok(TypedExpr::new(Expr::Assign(name, Box::new(diff)), span));
-            }
+        let lhs = self.parse_logical_or()?;
+        let start_span = lhs.span;
 
-            let assign_op = match self.peek() {
-                Token::Equals => None,
-                Token::PlusEquals => Some(BinaryOp::Add),
-                Token::MinusEquals => Some(BinaryOp::Sub),
-                Token::StarEquals => Some(BinaryOp::Mul),
-                Token::SlashEquals => Some(BinaryOp::Div),
-                Token::ModuloEquals => Some(BinaryOp::Mod),
-                _ => return self.parse_logical_or(),
-            };
-            self.advance(); // ident
-            self.advance(); // assignment token
-            let rhs = self.parse_expr()?;
-            let span = start.to(self.previous_span());
-
-            return Ok(match assign_op {
-                None => TypedExpr::new(Expr::Assign(name, Box::new(rhs)), span),
-                Some(op) => {
-                    let var = TypedExpr::new(Expr::Var(name.clone()), span);
-                    let combined = TypedExpr::new(Expr::BinaryOp(op, Box::new(var), Box::new(rhs)), span);
-                    TypedExpr::new(Expr::Assign(name, Box::new(combined)), span)
-                }
-            });
+        // postfix ++ / --
+        if self.current() == &Token::PlusPlus || self.current() == &Token::MinusMinus {
+            let op = if self.current() == &Token::PlusPlus { BinaryOp::Add } else { BinaryOp::Sub };
+            self.advance();
+            let span = start_span.to(self.previous_span());
+            let one = TypedExpr::new(Expr::IntLiteral(1), span);
+            let combined = TypedExpr::new(Expr::BinaryOp(op, Box::new(lhs.clone()), Box::new(one)), span);
+            return Ok(TypedExpr::new(Expr::Assign(Box::new(lhs), Box::new(combined)), span));
         }
-        self.parse_logical_or()
+
+        let assign_op = match self.current() {
+            Token::Assign => Some(None),
+            Token::PlusEquals => Some(Some(BinaryOp::Add)),
+            Token::MinusEquals => Some(Some(BinaryOp::Sub)),
+            Token::StarEquals => Some(Some(BinaryOp::Mul)),
+            Token::SlashEquals => Some(Some(BinaryOp::Div)),
+            Token::ModuloEquals => Some(Some(BinaryOp::Mod)),
+            _ => None,
+        };
+        let Some(assign_op) = assign_op else { return Ok(lhs); };
+        self.advance(); // consume the assignment operator
+        let rhs = self.parse_assignment()?;
+        let span = start_span.to(self.previous_span());
+        let value = match assign_op {
+            None => rhs,
+            Some(op) => TypedExpr::new(
+                Expr::BinaryOp(op, Box::new(lhs.clone()), Box::new(rhs)),
+                span,
+            ),
+        };
+        Ok(TypedExpr::new(Expr::Assign(Box::new(lhs), Box::new(value)), span))
     }
 
     fn parse_logical_or(&mut self) -> Result<TypedExpr, CompileError> {
@@ -394,7 +382,7 @@ impl Parser {
         } else {
             base
         };
-        let init = if self.current() == &Token::Equals {
+        let init = if self.current() == &Token::Assign {
             self.advance();
             Some(self.parse_expr()?)
         } else {
@@ -406,20 +394,56 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<TypedExpr, CompileError> {
         let start = self.current_span();
-        let op = match self.current() {
+
+        // cast: ( type ) unary
+        if self.current() == &Token::LParen && Self::is_type_start(self.peek()) {
+            self.advance(); // (
+            let ty = self.parse_type()?;
+            self.expect(&Token::RParen)?;
+            let operand = self.parse_unary()?;
+            let span = start.to(self.previous_span());
+            return Ok(TypedExpr::new(Expr::Cast(ty, Box::new(operand)), span));
+        }
+
+        if let Some(op) = match self.current() {
             Token::Minus => Some(UnaryOp::Negate),
             Token::Tilde => Some(UnaryOp::BitNot),
             Token::Bang => Some(UnaryOp::LogNot),
             _ => None,
-        };
-        if let Some(op) = op {
+        } {
             self.advance();
             let operand = self.parse_unary()?;
             let span = start.to(self.previous_span());
-            Ok(TypedExpr::new(Expr::UnaryOp(op, Box::new(operand)), span))
-        } else {
-            self.parse_primary()
+            return Ok(TypedExpr::new(Expr::UnaryOp(op, Box::new(operand)), span));
         }
+
+        if self.current() == &Token::Ampersand {
+            self.advance();
+            let operand = self.parse_unary()?;
+            let span = start.to(self.previous_span());
+            return Ok(TypedExpr::new(Expr::AddressOf(Box::new(operand)), span));
+        }
+        if self.current() == &Token::Star {
+            self.advance();
+            let operand = self.parse_unary()?;
+            let span = start.to(self.previous_span());
+            return Ok(TypedExpr::new(Expr::Deref(Box::new(operand)), span));
+        }
+
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut expr = self.parse_primary()?;
+        while self.current() == &Token::LBracket {
+            let start = expr.span;
+            self.advance(); // [
+            let idx = self.parse_expr()?;
+            self.expect(&Token::RBracket)?;
+            let span = start.to(self.previous_span());
+            expr = TypedExpr::new(Expr::Index(Box::new(expr), Box::new(idx)), span);
+        }
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<TypedExpr, CompileError> {
@@ -460,7 +484,14 @@ impl Parser {
     }
 }
 
-// --- Tests ---
+
+
+/* ===================================== */
+//                                       //
+//        Unit tests for the parser      //
+//                                       // 
+/* ===================================== */
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,7 +532,7 @@ mod tests {
     #[test]
     fn parse_var_decl_with_init() {
         let mut p = parser(vec![
-            Token::Int, Token::Ident("x".into()), Token::Equals,
+            Token::Int, Token::Ident("x".into()), Token::Assign,
             Token::IntLiteral(5), Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
@@ -520,11 +551,11 @@ mod tests {
     #[test]
     fn parse_assignment() {
         let mut p = parser(vec![
-            Token::Ident("x".into()), Token::Equals,
+            Token::Ident("x".into()), Token::Assign,
             Token::IntLiteral(10), Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
-        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign("x".into(), Box::new(e(Expr::IntLiteral(10))))))));
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(Box::new(e(Expr::Var("x".into()))), Box::new(e(Expr::IntLiteral(10))))))));
     }
 
     #[test]
@@ -535,7 +566,7 @@ mod tests {
         ]);
         let stmt = p.parse_statement().unwrap();
         assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
-            "x".into(),
+            Box::new(e(Expr::Var("x".into()))),
             Box::new(e(Expr::BinaryOp(
                 BinaryOp::Add,
                 Box::new(e(Expr::Var("x".into()))),
@@ -551,7 +582,7 @@ mod tests {
         ]);
         let stmt = p.parse_statement().unwrap();
         assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
-            "i".into(),
+            Box::new(e(Expr::Var("i".into()))),
             Box::new(e(Expr::BinaryOp(
                 BinaryOp::Add,
                 Box::new(e(Expr::Var("i".into()))),
@@ -603,7 +634,7 @@ mod tests {
     #[test]
     fn parse_long_var_decl_with_init() {
         let mut p = parser(vec![
-            Token::Long, Token::Ident("n".into()), Token::Equals,
+            Token::Long, Token::Ident("n".into()), Token::Assign,
             Token::IntLiteral(7), Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
@@ -633,5 +664,56 @@ mod tests {
         assert_eq!(stmt, s(Stmt::VarDecl {
             ty: Type::Array(Box::new(Type::Int), 10), name: "a".into(), init: None,
         }));
+    }
+
+        #[test]
+    fn parse_address_of() {
+        let mut p = parser(vec![Token::Ampersand, Token::Ident("x".into()), Token::EOF]);
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::AddressOf(Box::new(e(Expr::Var("x".into()))))));
+    }
+
+    #[test]
+    fn parse_deref() {
+        let mut p = parser(vec![Token::Star, Token::Ident("p".into()), Token::EOF]);
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::Deref(Box::new(e(Expr::Var("p".into()))))));
+    }
+
+    #[test]
+    fn parse_index() {
+        let mut p = parser(vec![
+            Token::Ident("a".into()), Token::LBracket, Token::IntLiteral(2), Token::RBracket, Token::EOF,
+        ]);
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::Index(
+            Box::new(e(Expr::Var("a".into()))),
+            Box::new(e(Expr::IntLiteral(2))),
+        )));
+    }
+
+    #[test]
+    fn parse_cast() {
+        let mut p = parser(vec![
+            Token::LParen, Token::Char, Token::Star, Token::RParen, Token::Ident("p".into()), Token::EOF,
+        ]);
+        let expr = p.parse_expr().unwrap();
+        assert_eq!(expr, e(Expr::Cast(
+            Type::Pointer(Box::new(Type::Char)),
+            Box::new(e(Expr::Var("p".into()))),
+        )));
+    }
+
+    #[test]
+    fn parse_deref_assignment() {
+        let mut p = parser(vec![
+            Token::Star, Token::Ident("p".into()), Token::Assign,
+            Token::IntLiteral(5), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
+            Box::new(e(Expr::Deref(Box::new(e(Expr::Var("p".into())))))),
+            Box::new(e(Expr::IntLiteral(5))),
+        )))));
     }
 }

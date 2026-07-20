@@ -348,13 +348,17 @@ impl Codegen {
                     BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
-            Expr::Assign(name, value) => {
-                self.gen_expr(value)?;
-                let offset = *self.variables.get(name).ok_or_else(|| {
-                    CompileError::new(format!("undefined variable `{name}`"), expr.span)
-                        .with_label("not found in this scope")
-                })?;
-                self.emit(&format!("  mov [rbp - {}], rax", -offset));
+            Expr::Assign(_lval, _value) => {
+                return Err(CompileError::new(
+                    "assignment codegen not yet implemented".to_string(),
+                    expr.span,
+                ));
+            }
+            Expr::AddressOf(_) | Expr::Deref(_) | Expr::Index(_, _) | Expr::Cast(_, _) => {
+                return Err(CompileError::new(
+                    "pointer/array codegen not yet implemented".to_string(),
+                    expr.span,
+                ));
             }
             Expr::Var(name) => {
                 let offset = *self.variables.get(name).ok_or_else(|| {

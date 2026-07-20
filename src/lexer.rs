@@ -30,6 +30,7 @@ pub enum Token {
     Modulo,
     PlusPlus,
     MinusMinus,
+    Assign,
     Equals,
     NotEquals,
     PlusEquals,
@@ -91,6 +92,7 @@ impl Token {
             Token::Modulo => "`%`".to_string(),
             Token::PlusPlus => "`++`".to_string(),
             Token::MinusMinus => "`--`".to_string(),
+            Token::Assign => "`=`".to_string(),
             Token::Equals => "`==`".to_string(),
             Token::NotEquals => "`!=`".to_string(),
             Token::PlusEquals => "`+=`".to_string(),
@@ -295,7 +297,7 @@ impl Lexer {
                 self.advance(); 
                 match self.current() {
                     Some('=') => { self.advance(); Token::Equals },
-                    _ => Token::Equals, // single '=' is for assignment, but we'll handle that in the parser
+                    _ => Token::Assign, // single '=' is assignment; '==' is Token::Equals
                 } 
             },
             Some(':') => { self.advance(); Token::Colon },
@@ -475,7 +477,7 @@ mod tests {
             Token::LParen,
             Token::Int,
             Token::Ident("i".to_string()),
-            Token::Equals,
+            Token::Assign,
             Token::IntLiteral(0),
             Token::Semicolon,
             Token::Ident("i".to_string()),

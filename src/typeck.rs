@@ -63,12 +63,16 @@ fn check_expr(expr: &mut TypedExpr, scope: &mut HashSet<String>) -> Result<(), C
             check_expr(l, scope)?;
             check_expr(r, scope)?;
         }
-        Expr::Assign(name, value) => {
-            if !scope.contains(name) {
-                return Err(CompileError::new(format!("undefined variable `{name}`"), span)
-                    .with_label("not found in this scope"));
-            }
-            check_expr(value, scope)?;
+        Expr::Assign(lval, rhs) => {
+            check_expr(lval, scope)?;
+            check_expr(rhs, scope)?;
+        }
+        Expr::AddressOf(inner) | Expr::Deref(inner) | Expr::Cast(_, inner) => {
+            check_expr(inner, scope)?;
+        }
+        Expr::Index(base, idx) => {
+            check_expr(base, scope)?;
+            check_expr(idx, scope)?;
         }
         Expr::FunctionCall { args, .. } => {
             for a in args {
