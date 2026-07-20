@@ -2,6 +2,7 @@
 /.claude
 /graphify*
 /.vscode
+/docs/superpowers
 
 # discard artifacts from compilation/testing
 *.o
