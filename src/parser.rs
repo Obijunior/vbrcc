@@ -67,9 +67,13 @@ impl Parser {
         Ok(Program { functions })
     }
 
+    fn is_type_start(tok: &Token) -> bool {
+        matches!(tok, Token::Int | Token::Char | Token::Long | Token::Void)
+    }
+
     fn parse_type(&mut self) -> Result<Type, CompileError> {
         let span = self.current_span();
-        let ty = match self.advance().clone() {
+        let mut ty = match self.advance().clone() {
             Token::Int => Type::Int,
             Token::Char => Type::Char,
             Token::Long => Type::Long,
@@ -82,6 +86,10 @@ impl Parser {
                 .with_label("expected `int`, `char`, `long`, or `void`"));
             }
         };
+        while self.current() == &Token::Star {
+            self.advance();
+            ty = Type::Pointer(Box::new(ty));
+        }
         Ok(ty)
     }
 
@@ -360,7 +368,7 @@ impl Parser {
 
     fn parse_decl(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let start = self.current_span();
-        let ty = self.parse_type()?;
+        let base = self.parse_type()?;
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -369,6 +377,22 @@ impl Parser {
                     self.previous_span(),
                 ));
             }
+        };
+        let ty = if self.current() == &Token::LBracket {
+            self.advance();
+            let len = match self.advance().clone() {
+                Token::IntLiteral(n) if n >= 0 => n as usize,
+                other => {
+                    return Err(CompileError::new(
+                        format!("expected array length, found {}", other.describe()),
+                        self.previous_span(),
+                    ));
+                }
+            };
+            self.expect(&Token::RBracket)?;
+            Type::Array(Box::new(base), len)
+        } else {
+            base
         };
         let init = if self.current() == &Token::Equals {
             self.advance();
@@ -585,6 +609,29 @@ mod tests {
         let stmt = p.parse_statement().unwrap();
         assert_eq!(stmt, s(Stmt::VarDecl {
             ty: Type::Long, name: "n".into(), init: Some(e(Expr::IntLiteral(7))),
+        }));
+    }
+
+    #[test]
+    fn parse_pointer_var_decl() {
+        let mut p = parser(vec![
+            Token::Int, Token::Star, Token::Ident("p".into()), Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Pointer(Box::new(Type::Int)), name: "p".into(), init: None,
+        }));
+    }
+
+    #[test]
+    fn parse_array_var_decl() {
+        let mut p = parser(vec![
+            Token::Int, Token::Ident("a".into()), Token::LBracket,
+            Token::IntLiteral(10), Token::RBracket, Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Array(Box::new(Type::Int), 10), name: "a".into(), init: None,
         }));
     }
 }

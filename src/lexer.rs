@@ -55,6 +55,9 @@ pub enum Token {
     LessThanEquals,
     GreaterThan,
     GreaterThanEquals,
+    Ampersand,
+    LBracket,
+    RBracket,
 
     EOF,
 }
@@ -101,7 +104,10 @@ impl Token {
             Token::RParen => "`)`".to_string(),
             Token::LBrace => "`{`".to_string(),
             Token::RBrace => "`}`".to_string(),
+            Token::LBracket => "`[`".to_string(),
+            Token::RBracket => "`]`".to_string(),
             Token::Semicolon => "`;`".to_string(),
+            Token::Ampersand => "`&`".to_string(),
             Token::Bang => "`!`".to_string(),
             Token::Tilde => "`~`".to_string(),
             Token::Comma => "`,`".to_string(),
@@ -221,6 +227,8 @@ impl Lexer {
             Some(')') => { self.advance(); Token::RParen },
             Some('{') => { self.advance(); Token::LBrace },
             Some('}') => { self.advance(); Token::RBrace },
+            Some('[') => { self.advance(); Token::LBracket },
+            Some(']') => { self.advance(); Token::RBracket },
             Some(';') => { self.advance(); Token::Semicolon },
             Some(',') => { self.advance(); Token::Comma },
             Some('-') => { 
@@ -311,7 +319,7 @@ impl Lexer {
                     self.advance(); 
                     Token::LogicalAnd
                 } else {
-                    panic!("Unexpected character: '&' (did you mean '&&'?)");
+                    Token::Ampersand
                 }
             },
             Some('|') => {
@@ -495,5 +503,15 @@ mod tests {
         let err = Lexer::new("int x = @;").tokenize().unwrap_err();
         assert!(err.message.contains('@'), "message: {}", err.message);
         assert_eq!(err.span.start, 8); // position of '@'
+    }
+
+     #[test]
+    fn lex_ampersand_and_brackets() {
+        assert_eq!(lex("& [ ]"), vec![Token::Ampersand, Token::LBracket, Token::RBracket, Token::EOF]);
+    }
+
+    #[test]
+    fn lex_logical_and_still_wins() {
+        assert_eq!(lex("&&"), vec![Token::LogicalAnd, Token::EOF]);
     }
 }
