@@ -37,11 +37,11 @@ fn tokenize_for_loop_program() {
         vec![
             Token::Int, Token::Ident("main".into()), Token::LParen, Token::RParen, Token::LBrace,
             // int s = 0;
-            Token::Int, Token::Ident("s".into()), Token::Equals, Token::IntLiteral(0), Token::Semicolon,
+            Token::Int, Token::Ident("s".into()), Token::Assign, Token::IntLiteral(0), Token::Semicolon,
             // for (
             Token::For, Token::LParen,
             // int i = 0;
-            Token::Int, Token::Ident("i".into()), Token::Equals, Token::IntLiteral(0), Token::Semicolon,
+            Token::Int, Token::Ident("i".into()), Token::Assign, Token::IntLiteral(0), Token::Semicolon,
             // i < 10;
             Token::Ident("i".into()), Token::LessThan, Token::IntLiteral(10), Token::Semicolon,
             // i++)

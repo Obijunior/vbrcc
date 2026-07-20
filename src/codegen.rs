@@ -150,8 +150,8 @@ impl Codegen {
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
             }
-            Stmt::VarDecl { name, init, .. } => {
-                self.stack_offset -= 8;
+            Stmt::VarDecl { ty, name, init, .. } => {
+                self.stack_offset -= ty.size() as i64;
                 let offset = self.stack_offset;
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
@@ -204,6 +204,48 @@ impl Codegen {
         }
         Ok(())
     }
+
+    /// Compute the ADDRESS of an lvalue into rax (as opposed to its value).
+    fn gen_lvalue_addr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
+        match &expr.node {
+            Expr::Var(name) => {
+                let offset = *self.variables.get(name).ok_or_else(|| {
+                    CompileError::new(format!("undefined variable `{name}`"), expr.span)
+                        .with_label("not found in this scope")
+                })?;
+                self.emit(&format!("  lea rax, [rbp - {}]", -offset));
+            }
+            Expr::Deref(inner) => {
+                // The address of `*p` is the value of `p`.
+                self.gen_expr(inner)?;
+            }
+            Expr::Index(base, idx) => {
+                let elem_size = base.ty.pointee().map(|t| t.size()).unwrap_or(8);
+                self.gen_ptr_base(base)?; // rax = base pointer
+                self.emit("  push rax");
+                self.gen_expr(idx)?; // rax = index
+                self.emit(&format!("  imul rax, {}", elem_size));
+                self.emit("  mov rcx, rax");
+                self.emit("  pop rax");
+                self.emit("  add rax, rcx");
+            }
+            _ => {
+                return Err(CompileError::new("expression is not an lvalue", expr.span)
+                    .with_label("cannot take its address"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Yield the base pointer of an indexing target in rax: an array decays to its
+    /// address; a pointer yields its value.
+    fn gen_ptr_base(&mut self, base: &TypedExpr) -> Result<(), CompileError> {
+        if matches!(base.ty, Type::Array(_, _)) {
+            self.gen_lvalue_addr(base)
+        } else {
+            self.gen_expr(base)
+        }
+    }    
 
     fn gen_expr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
@@ -299,8 +341,18 @@ impl Codegen {
                 self.emit("  pop rax");        // left operand back in rax
 
                 match op {
-                    BinaryOp::Add => self.emit("  add rax, rcx"),
-                    BinaryOp::Sub => self.emit("  sub rax, rcx"),
+                    BinaryOp::Add => {
+                        if let Some(t) = left.ty.pointee() {
+                            self.emit(&format!("  imul rcx, {}", t.size()));
+                        } 
+                        self.emit("  add rax, rcx")
+                    }
+                    BinaryOp::Sub => {
+                        if let Some(t) = left.ty.pointee() {
+                            self.emit(&format!("  imul rcx, {}", t.size()));
+                        }
+                        self.emit("  sub rax, rcx")
+                    }
                     BinaryOp::Mul => self.emit("  imul rax, rcx"),
                     BinaryOp::Div => {
                         // idivq divides rdx:rax by the operand
@@ -348,24 +400,45 @@ impl Codegen {
                     BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
-            Expr::Assign(_lval, _value) => {
-                return Err(CompileError::new(
-                    "assignment codegen not yet implemented".to_string(),
-                    expr.span,
-                ));
-            }
-            Expr::AddressOf(_) | Expr::Deref(_) | Expr::Index(_, _) | Expr::Cast(_, _) => {
-                return Err(CompileError::new(
-                    "pointer/array codegen not yet implemented".to_string(),
-                    expr.span,
-                ));
-            }
             Expr::Var(name) => {
                 let offset = *self.variables.get(name).ok_or_else(|| {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
                 })?;
-                self.emit(&format!("  mov rax, [rbp - {}]", -offset));
+                if matches!(expr.ty, Type::Array(_, _)) {
+                    // Array decays to a pointer to its first element.
+                    self.emit(&format!("  lea rax, [rbp - {}]", -offset));
+                } else {
+                    self.emit(&format!("  mov rax, [rbp - {}]", -offset));
+                }
+            }
+
+            Expr::AddressOf(inner) => {
+                self.gen_lvalue_addr(inner)?;
+            }
+
+            Expr::Deref(inner) => {
+                self.gen_expr(inner)?;         // rax = pointer
+                self.emit("  mov rax, [rax]"); // load the pointee
+            }
+
+            Expr::Index(_base, _idx) => {
+                self.gen_lvalue_addr(expr)?;   // rax = element address
+                self.emit("  mov rax, [rax]"); // load the element
+            }
+
+            Expr::Cast(_ty, inner) => {
+                // Loose model: no representation change; just evaluate the operand.
+                self.gen_expr(inner)?;
+            }
+
+            Expr::Assign(lval, value) => {
+                self.gen_expr(value)?;          // rax = rhs value
+                self.emit("  push rax");
+                self.gen_lvalue_addr(lval)?;    // rax = destination address
+                self.emit("  pop rcx");         // rcx = rhs value
+                self.emit("  mov [rax], rcx");  // store
+                self.emit("  mov rax, rcx");    // assignment evaluates to the stored value
             }
         }
         Ok(())
@@ -384,7 +457,9 @@ mod tests {
         let mut lexer = crate::lexer::Lexer::new(source);
         let tokens = lexer.tokenize().unwrap();
         let mut parser = crate::parser::Parser::new(tokens);
-        let program = parser.parse_program().unwrap();
+        let mut program = parser.parse_program().unwrap();
+        // Codegen relies on typeck-annotated `expr.ty` (pointer scaling, array decay).
+        crate::typeck::check(&mut program).unwrap();
         let mut codegen = Codegen::new();
         codegen.generate(&program).unwrap()
     }
@@ -547,5 +622,29 @@ mod tests {
         assert!(asm.contains("or_0_true:"));
         assert!(asm.contains("or_0_end:"));
         assert!(!asm.contains("push rax"), "logical OR must not use the evaluate-both-sides pattern");
+    }
+
+    #[test]
+    fn test_address_of_emits_lea() {
+        let asm = compile("int main() { int x = 5; int *p = &x; return 0; }");
+        assert!(asm.contains("lea rax, [rbp -"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn test_deref_load() {
+        let asm = compile("int main() { int x = 5; int *p = &x; return *p; }");
+        assert!(asm.contains("mov rax, [rax]"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn test_pointer_arithmetic_scales_by_eight() {
+        let asm = compile("int main() { int a[3]; int *p = a; return *(p + 1); }");
+        assert!(asm.contains("imul rcx, 8"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn test_store_through_pointer() {
+        let asm = compile("int main() { int x = 0; int *p = &x; *p = 7; return x; }");
+        assert!(asm.contains("mov [rax], rcx"), "asm:\n{asm}");
     }
 }

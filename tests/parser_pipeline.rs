@@ -87,7 +87,10 @@ fn parse_for_loop() {
             )));
             match &update.node {
                 Stmt::Expr(inner) => match &inner.node {
-                    Expr::Assign(name, _) => assert_eq!(name, "i"),
+                    Expr::Assign(lval, _) => match &lval.node {
+                        Expr::Var(name) => assert_eq!(name, "i"),
+                        other => panic!("expected var lvalue, got {:?}", other),
+                    },
                     other => panic!("expected assignment update, got {:?}", other),
                 },
                 other => panic!("expected expr update, got {:?}", other),
