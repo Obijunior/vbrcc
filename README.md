@@ -1,11 +1,16 @@
 # VBRCC - Very Basic Rust C Compiler
 
+[![Crates.io](https://img.shields.io/crates/v/vbrcc.svg)](https://crates.io/crates/vbrcc)
+[![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/<user>/<repo>/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+<!-- [![Downloads](https://img.shields.io/crates/d/vbrcc.svg)](https://crates.io/crates/vbrcc) -->
+
 A hobby C compiler and assembler written in Rust targeting x86-64 (Intel syntax)
 
 ## Usage
 
 ```sh
-cargo run -- <input.c> [-o <output_file>] [--lld-link/--gcc] [--keep-artifacts]
+vbrcc <input.c> [-o <output_file>] [--lld-link/--gcc] [--keep-artifacts]
 ```
 
 | Flag | Pipeline | External dependencies |

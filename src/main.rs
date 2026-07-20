@@ -31,7 +31,7 @@ fn enable_ansi() {
     // Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING on stderr so ANSI works in legacy consoles.
     const STD_ERROR_HANDLE: u32 = -12i32 as u32;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
-    unsafe extern "system" {
+    extern "system" {
         fn GetStdHandle(n_std_handle: u32) -> *mut core::ffi::c_void;
         fn GetConsoleMode(h: *mut core::ffi::c_void, mode: *mut u32) -> i32;
         fn SetConsoleMode(h: *mut core::ffi::c_void, mode: u32) -> i32;
