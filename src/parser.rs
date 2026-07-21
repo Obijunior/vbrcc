@@ -122,6 +122,9 @@ impl Parser {
                 }
             };
             params.push((ptype, pname));
+            if self.current() == &Token::Comma {
+                self.advance();
+            }
         }
         self.expect(&Token::RParen)?;
 

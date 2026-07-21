@@ -25,6 +25,16 @@ fn parse_return_literal_program() {
 }
 
 #[test]
+fn parse_multi_parameter_function() {
+    let program = parse("int add(int a, int b) { return a + b; }").unwrap();
+    let f = &program.functions[0];
+    assert_eq!(f.params, vec![
+        (Type::Int, "a".to_string()),
+        (Type::Int, "b".to_string()),
+    ]);
+}
+
+#[test]
 fn parse_unary_negate_in_return_statement() {
     let program = parse("int main() { return -42; }").unwrap();
     let body = &program.functions[0].body;
