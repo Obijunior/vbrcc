@@ -1,3 +1,24 @@
+//! Stage 2: turning the token stream into an abstract syntax tree.
+//!
+//! [`Parser::parse_program`] consumes the tokens from [`crate::lexer`] and produces a
+//! [`crate::ast::Program`]: a list of functions, each with typed parameters, a return
+//! type, and a body.
+//!
+//! The parser is recursive descent: one method per grammar rule, with expressions
+//! handled by precedence climbing, where each level calls the next-higher-precedence
+//! level and combines results as it unwinds.
+//!
+//! # What this stage does not do
+//!
+//! The parser checks *shape*, not *meaning*. It accepts an assignment whose left-hand
+//! side could never be an lvalue; rejecting that is [`crate::typeck`]'s job. This split
+//! lets type errors carry useful messages instead of surfacing as syntax errors.
+//!
+//! Accordingly, every expression is wrapped in a `TypedExpr` whose type field is
+//! initialised to `Type::Unknown`. The type checker fills those in later by mutating the
+//! tree in place. Statements are wrapped in `Spanned<Stmt>` to preserve source locations
+//! for diagnostics.
+
 use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Span, Spanned};

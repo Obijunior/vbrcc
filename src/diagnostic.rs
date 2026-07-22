@@ -1,3 +1,27 @@
+//! Error reporting: spans, compile errors, and rustc-style rendering.
+//!
+//! Every stage of the compiler returns `Result<_, CompileError>`. A [`CompileError`]
+//! carries a message, the [`Span`] it applies to, and an optional label for the caret
+//! line. [`render`] formats one into a rustc-style frame: message, file, line and
+//! column, the offending source line, and a caret underlining the span, with colour
+//! when writing to a terminal.
+//!
+//! Compilation stops at the first error; there is no error recovery, so exactly one
+//! diagnostic is ever produced.
+//!
+//! [`Spanned<T>`] attaches a span to any node and derefs to the inner value, which keeps
+//! span plumbing out of the way in the parser and type checker.
+//!
+//! # Span equality
+//!
+//! **[`Span`] compares equal to every other [`Span`].** The `PartialEq` implementation
+//! ignores its fields, so that AST nodes can be compared structurally without their
+//! source positions interfering. The consequences:
+//!
+//! - Never use a `Span` as a `HashMap` key.
+//! - Never write `assert_eq!` on two spans in a test. It passes unconditionally.
+//!   Compare `span.start` and `span.end` individually instead.
+
 use std::ops::Deref;
 
 #[derive(Clone, Debug, Copy)]

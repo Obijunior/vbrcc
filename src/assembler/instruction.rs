@@ -1,3 +1,20 @@
+//! Parsing Intel-syntax assembly text into structured instructions.
+//!
+//! This is the assembler's front end. It reads the `.s` text emitted by
+//! [`crate::codegen`] one line at a time and produces an [`AsmLine`] describing what
+//! that line means: an [`Instruction`], a label definition, a section change, a
+//! `.globl` declaration, raw data bytes, or nothing at all (blank lines, comments,
+//! and directives the assembler ignores such as `.intel_syntax noprefix`).
+//!
+//! [`Instruction`] is deliberately shaped around *addressing modes* rather than
+//! mnemonics: `mov` becomes five distinct variants (`MovRegImm64`, `MovRegReg`,
+//! `MovMemDispReg`, `MovRegMemDisp`, `MovzxReg64Reg8`) because each encodes to a
+//! different opcode and ModR/M layout. Resolving the addressing mode once here means
+//! [`super::encoder`] never has to re-inspect operands to decide how to encode.
+//!
+//! The parser is intentionally narrow. It accepts the forms this compiler emits, not
+//! the full Intel grammar, and rejects anything else rather than guessing.
+
 use super::register::{Register64, Register8};
 
 #[derive(Debug)]

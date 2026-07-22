@@ -3,6 +3,7 @@
 /graphify*
 /.vscode
 /docs/superpowers
+/RELEASE_STEPS.md
 
 # discard artifacts from compilation/testing
 *.o
@@ -13,3 +14,8 @@
 *.obj
 *.def
 *.lib
+
+# ...but sample programs and test fixtures are source, not artifacts
+!examples/*.c
+!tests/*.c
+!tests/*.s

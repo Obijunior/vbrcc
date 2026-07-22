@@ -1,3 +1,31 @@
+//! Writing a relocatable COFF object file.
+//!
+//! This is the `--lld-link` output path. Where [`super::pe`] produces a finished
+//! executable, this module produces a `.obj` with unresolved references left for an
+//! external linker to fill in, which is what makes linking against the real C runtime
+//! possible.
+//!
+//! A COFF object here consists of a header, section headers and data for `.text` and
+//! `.data`, a relocation table, and a symbol table with an attached string table.
+//!
+//! # Symbols and relocations
+//!
+//! Every symbol is either *defined* (it lives at a known offset in one of this object's
+//! sections, emitted as `IMAGE_SYM_CLASS_STATIC` or `IMAGE_SYM_CLASS_EXTERNAL`) or
+//! *undefined*: a reference such as `printf` that the linker must resolve against
+//! another object or import library. Undefined symbols carry section number 0.
+//!
+//! References are emitted as `IMAGE_REL_AMD64_REL32` relocations, meaning RIP-relative
+//! 32-bit displacements. The value written into the instruction stream is a placeholder;
+//! the linker computes the final displacement once it knows where everything landed.
+//!
+//! # String table
+//!
+//! COFF stores symbol names inline only when they fit in eight bytes. Longer names go
+//! into a trailing string table, and the symbol record instead holds a zero word
+//! followed by an offset into it. Both encodings are produced here depending on name
+//! length.
+
 use std::collections::HashMap;
 
 use super::relocation::AssembleResult;

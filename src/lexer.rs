@@ -1,3 +1,25 @@
+//! Stage 1: turning C source text into a token stream.
+//!
+//! [`Lexer::tokenize`] scans the source once and returns a `Vec<SpannedToken>`, or a
+//! [`CompileError`] pointing at the first character it could not recognise.
+//!
+//! Every token carries a [`Span`] recording where it began and ended in the original
+//! text. Spans are threaded through the parser and type checker untouched so that an
+//! error discovered several stages later can still be reported against the exact source
+//! it came from.
+//!
+//! # Quirks
+//!
+//! - `=` and `==` produce distinct tokens (`Token::Assign` and `Token::Equals`). The
+//!   parser depends on that distinction to tell an assignment from an equality test, and
+//!   collapsing them produces confusing downstream errors.
+//! - Lines beginning with `#` are **skipped as if they were comments**. Preprocessor
+//!   directives are not implemented, so `#include <stdio.h>` is silently discarded
+//!   rather than rejected. The program compiles, but nothing the header would have
+//!   declared exists.
+//! - Only `//` line comments are recognised. Block comments (`/* */`) are not
+//!   supported and will lex as a division followed by a multiplication.
+
 use crate::diagnostic::{CompileError, Span};
 
 #[derive(Debug, Clone, PartialEq)]  // so we can use '{:?}' and compare tokens. Clone for duplicating tokens when needed.

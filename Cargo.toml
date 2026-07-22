@@ -1,13 +1,21 @@
 [package]
 name = "vbrcc"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "A small C compiler with a hand-written x86-64 assembler and PE/COFF backend"
 repository = "https://github.com/obijunior/vbrcc"
 readme = "README.md"
 keywords = ["compiler", "c", "x86-64", "assembler"]
-categories = ["compilers"]
+categories = ["compilers", "command-line-utilities"]
+exclude = ["/docs", "/.github", "/graphify-out", "/.vscode"]
+
+# docs.rs builds on Linux by default, but vbrcc emits Windows PE/COFF and has
+# Windows-gated code in main.rs. Build the published docs under the MSVC target so
+# the rendered cfg view matches what the compiler actually targets.
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+all-features = true
 
 [profile.release]
 strip = true

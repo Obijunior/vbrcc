@@ -5,6 +5,10 @@ It describes each stage of the pipeline, the data that moves between the stages,
 and the main source files. Read this document to learn how the parts fit together
 before you change the code.
 
+For building the project, backend prerequisites, running the tests, and debugging
+techniques, see [CONTRIBUTING.md](CONTRIBUTING.md). For per-module API documentation,
+see [docs.rs/vbrcc](https://docs.rs/vbrcc) or run `cargo doc --no-deps --open`.
+
 VBRCC uses no external compiler libraries. The lexer, the parser, the type
 checker, the code generator, and the assembler are all hand-written in Rust.
 
@@ -158,6 +162,11 @@ The assembler supports two output formats:
   Windows PE32+ executable. The file has a DOS header, a COFF header, a section
   table, and an import table. The assembler resolves an external call, for example
   `printf`, through the Import Address Table.
+
+  Note: the import path is not finished. A program with no external calls builds and
+  runs correctly. A program that calls `printf` also builds, and the compiler reports
+  success, but the resulting image fails to load (exit code 127). Use the `--lld-link`
+  mode for such programs until this is fixed.
 - **A COFF object** (`coff.rs`, for the `--lld-link` path). The assembler writes a
   relocatable object file. The file has a symbol table and relocations. The linker
   `lld-link` resolves the relocations.

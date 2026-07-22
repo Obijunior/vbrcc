@@ -1,3 +1,26 @@
+//! Stage 3: assigning a type to every expression, and rejecting the ones that don't work.
+//!
+//! [`check`] walks the AST produced by [`crate::parser`] and mutates it in place,
+//! writing a resolved [`Type`] into the `ty` field of every `TypedExpr`. It runs before
+//! code generation, so the code generator can assume every expression is typed.
+//!
+//! # Errors reported here
+//!
+//! - Use of an undeclared variable.
+//! - Dereferencing a value that is not a pointer.
+//! - Indexing a value that is not a pointer or an array.
+//! - Assigning to something that is not an lvalue. An lvalue is a variable, a
+//!   dereference, or an index. The parser accepts any expression on the left of `=`,
+//!   and this is where that gets caught.
+//!
+//! # Scoping
+//!
+//! The scope is a single flat `HashMap<String, Type>` for the whole function. Block-level
+//! scope is not implemented, so a variable declared inside an `if` or a loop body remains
+//! visible after that block ends, and an inner declaration shadowing an outer one will
+//! overwrite it instead. Adding real scoping means replacing this map with a stack of
+//! maps and pushing a frame per block.
+
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;

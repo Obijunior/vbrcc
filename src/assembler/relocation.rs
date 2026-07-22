@@ -1,3 +1,17 @@
+//! Relocations, symbols, and the assembler's output bundle.
+//!
+//! These types are the interface between [`super::encoder`] and the two container
+//! writers, [`super::pe`] and [`super::coff`].
+//!
+//! A [`Relocation`] records a spot in the encoded bytes that could not be finalised
+//! during encoding, typically a call to a symbol whose address is not yet known,
+//! along with the symbol it refers to and how the eventual value should be applied.
+//! A [`Symbol`] with `section: None` is external and must be resolved by a linker or an
+//! import table; otherwise it is defined at `offset` within that section.
+//!
+//! [`AssembleResult`] is what a full assembly pass returns: the encoded `.text` and
+//! `.data` bytes plus the relocation and symbol tables the container writer needs.
+
 use super::instruction::Section;
 
 #[derive(Debug)]

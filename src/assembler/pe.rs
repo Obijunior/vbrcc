@@ -1,5 +1,34 @@
-// Windows PE (Portable Executable) wrapper for raw machine code.
-// This emits a minimal but valid PE32+ executable with optional .idata.
+//! Writing a complete Windows PE32+ executable.
+//!
+//! This module wraps raw machine code in a minimal but valid Portable Executable
+//! image. It is the default output path, and the reason the compiler needs no linker.
+//! The layout follows Microsoft's *PE Format* specification: a DOS stub kept for
+//! backwards compatibility, a PE signature, a COFF header, an optional header (which
+//! is required for executables despite the name), and a section table.
+//!
+//! # Alignment
+//!
+//! PE images carry two different alignments and they are not interchangeable. Section
+//! data is padded to `FileAlignment` on disk (512 bytes here) but mapped at
+//! `SectionAlignment` in memory (4096, one page). Every address therefore exists in two
+//! forms: a file offset and a relative virtual address (RVA). Confusing the two yields
+//! an image that inspects fine in a hex dump and fails to load.
+//!
+//! # Imports
+//!
+//! Calls to external functions such as `printf` are resolved through the `.idata`
+//! section, which holds an import directory, a lookup table, and an Import Address
+//! Table. The loader walks the directory, resolves each named import against the
+//! exporting DLL, and overwrites the IAT entry with the real address, so an indirect
+//! call through the IAT slot reaches the right function at run time.
+//!
+//! **This path is not finished.** An image with imports is emitted and reported as a
+//! success, but currently fails to load (exit code `127`, no output), while
+//! import-free images run correctly. Until it is fixed, programs calling into the C
+//! runtime should be built through [`super::coff`] and `lld-link`.
+//!
+//! [`create_pe_wrapper`] takes finished `.text`, `.data` and `.idata` contents and
+//! returns the complete image as bytes.
 
 fn align_up(value: u32, align: u32) -> u32 {
     (value + align - 1) & !(align - 1)

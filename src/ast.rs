@@ -1,3 +1,23 @@
+//! The abstract syntax tree and the type system.
+//!
+//! These are the data structures every stage after the parser operates on.
+//! [`Program`] holds a list of [`Function`]s; a function body is a list of [`Stmt`];
+//! statements contain [`Expr`] trees. Expressions are wrapped in [`TypedExpr`], which
+//! pairs an expression with its [`Span`] and its [`Type`].
+//!
+//! The `ty` field starts as [`Type::Unknown`] when the parser builds the tree, and is
+//! filled in by [`crate::typeck`]. By the time [`crate::codegen`] sees the tree, every
+//! expression has a real type, which lets the code generator scale pointer
+//! arithmetic and decide when an array decays.
+//!
+//! # Type sizes
+//!
+//! [`Type::size`] and [`Type::align`] are the **single** place type widths are decided.
+//! They currently implement loose sizing: every scalar and every pointer is 8 bytes, and
+//! an array reserves 8 bytes per element. C says otherwise, and the divergence is
+//! intentional. Centralising it here means implementing true widths (`char` = 1,
+//! `int` = 4) is a change to these two methods, not a hunt through the code generator.
+
 use crate::diagnostic::{Span, Spanned};
 
 #[derive(Debug, Clone, PartialEq)]

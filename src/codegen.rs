@@ -1,3 +1,37 @@
+//! Stage 4: emitting Intel-syntax x86-64 assembly from the typed AST.
+//!
+//! [`Codegen::generate`] walks the type-annotated tree and returns assembly text. It
+//! reads the `ty` field on each expression to scale pointer arithmetic correctly and to
+//! decide when an array decays to a pointer, so it must run after [`crate::typeck`].
+//!
+//! # Register and stack discipline
+//!
+//! The conventions below hold throughout. If you add a code path that breaks one, the
+//! compiler will still produce assembly, and that assembly will be wrong.
+//!
+//! - **Every expression leaves its result in `rax`.**
+//! - **Binary operations spill through the stack.** The left operand is evaluated and
+//!   pushed, the right operand is evaluated, the left is popped back into `rax` and the
+//!   right ends up in `rcx`, then the operation is emitted. This is inefficient, since a
+//!   register allocator would avoid most of it, but it is uniform and composes to
+//!   arbitrary expression depth without running out of registers.
+//! - **Locals live on the stack** at negative offsets from `rbp`, tracked by the
+//!   `variables` map.
+//! - **Labels are numbered**, producing names like `loop_0_start` and `if_0_end`, so
+//!   nested control flow cannot collide.
+//!
+//! # Values versus addresses
+//!
+//! Two methods carry the expression logic. Pick the wrong one and you store to the
+//! address of a value, or dereference an address you meant to keep:
+//!
+//! - `gen_expr` computes the **value** of an expression into `rax`.
+//! - `gen_lvalue_addr` computes the **address** of an lvalue into `rax`. It is used for
+//!   `&x`, for stores through a pointer, and for indexing.
+//!
+//! String literals are collected into a data section as they are encountered and
+//! referenced by RIP-relative `lea`.
+
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;
