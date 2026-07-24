@@ -62,6 +62,24 @@ impl Codegen {
         self.output.push('\n');
     }
 
+    /// Load `width` bytes from `addr` into rax, sign-extending narrow values.
+    fn emit_load(&mut self, addr: &str, width: usize) {
+        match width {
+            1 => self.emit(&format!("  movsx rax, byte ptr {}", addr)),
+            4 => self.emit(&format!("  movsxd rax, dword ptr {}", addr)),
+            _ => self.emit(&format!("  mov rax, {}", addr)),
+        }
+    }
+
+    /// Store the low `width` bytes of `src` (a 64-bit reg name) to `addr`.
+    fn emit_store(&mut self, addr: &str, src: &str, width: usize) {
+        match width {
+            1 => self.emit(&format!("  mov byte ptr {}, {}", addr, src)),
+            4 => self.emit(&format!("  mov dword ptr {}, {}", addr, src)),
+            _ => self.emit(&format!("  mov {}, {}", addr, src)),
+        }
+    }
+
     fn emit_data(&mut self, line: &str) {
         self.data_section.push_str(line);
         self.data_section.push('\n');
@@ -186,11 +204,13 @@ impl Codegen {
             }
             Stmt::VarDecl { ty, name, init, .. } => {
                 self.stack_offset -= ty.size() as i64;
-                let offset = self.stack_offset;
+                self.stack_offset = -Codegen::align_up(-self.stack_offset, ty.align() as i64);
+                let offset: i64 = self.stack_offset;
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
                     self.gen_expr(expr)?;
-                    self.emit(&format!("  mov [rbp - {}], rax", -offset));
+                    let addr = format!("[rbp - {}]", -offset);
+                    self.emit_store(&addr, "rax", ty.size());
                 }
             }
             Stmt::While { cond, body } => {
@@ -443,7 +463,8 @@ impl Codegen {
                     // Array decays to a pointer to its first element.
                     self.emit(&format!("  lea rax, [rbp - {}]", -offset));
                 } else {
-                    self.emit(&format!("  mov rax, [rbp - {}]", -offset));
+                    let addr = format!("[rbp - {}]", -offset);
+                    self.emit_load(&addr, expr.ty.size());
                 }
             }
 
@@ -453,12 +474,12 @@ impl Codegen {
 
             Expr::Deref(inner) => {
                 self.gen_expr(inner)?;         // rax = pointer
-                self.emit("  mov rax, [rax]"); // load the pointee
+                self.emit_load("[rax]", expr.ty.size());
             }
 
             Expr::Index(_base, _idx) => {
                 self.gen_lvalue_addr(expr)?;   // rax = element address
-                self.emit("  mov rax, [rax]"); // load the element
+                self.emit_load("[rax]", expr.ty.size());
             }
 
             Expr::Cast(_ty, inner) => {
@@ -471,7 +492,7 @@ impl Codegen {
                 self.emit("  push rax");
                 self.gen_lvalue_addr(lval)?;    // rax = destination address
                 self.emit("  pop rcx");         // rcx = rhs value
-                self.emit("  mov [rax], rcx");  // store
+                self.emit_store("[rax]", "rcx", lval.ty.size());  // store
                 self.emit("  mov rax, rcx");    // assignment evaluates to the stored value
             }
         }
@@ -545,8 +566,8 @@ mod tests {
     fn test_var_decl_and_return() {
         let asm = compile("int main() { int x = 5; return x; }");
         assert!(asm.contains("mov rax, 5"));
-        assert!(asm.contains("mov [rbp - 8], rax"));
-        assert!(asm.contains("mov rax, [rbp - 8]"));
+        assert!(asm.contains("mov dword ptr [rbp - 4], rax"));
+        assert!(asm.contains("movsxd rax, dword ptr [rbp - 4]"));
         assert!(asm.contains("ret"));
     }
 
@@ -667,18 +688,18 @@ mod tests {
     #[test]
     fn test_deref_load() {
         let asm = compile("int main() { int x = 5; int *p = &x; return *p; }");
-        assert!(asm.contains("mov rax, [rax]"), "asm:\n{asm}");
+        assert!(asm.contains("movsxd rax, dword ptr [rax]"), "asm:\n{asm}");
     }
 
     #[test]
-    fn test_pointer_arithmetic_scales_by_eight() {
+    fn test_pointer_arithmetic_scales_by_four() {
         let asm = compile("int main() { int a[3]; int *p = a; return *(p + 1); }");
-        assert!(asm.contains("imul rcx, 8"), "asm:\n{asm}");
+        assert!(asm.contains("imul rcx, 4"), "asm:\n{asm}");
     }
 
     #[test]
     fn test_store_through_pointer() {
         let asm = compile("int main() { int x = 0; int *p = &x; *p = 7; return x; }");
-        assert!(asm.contains("mov [rax], rcx"), "asm:\n{asm}");
+        assert!(asm.contains("mov dword ptr [rax], rcx"), "asm:\n{asm}");
     }
 }

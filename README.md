@@ -124,6 +124,7 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 | --- | --- |
 | Integer literals | `42` |
 | String literals | `"hello\n"` |
+| Character literals | `'a'`, `'\0'`, `'\n'` |
 | Variables | `x`, `sum` |
 | Arithmetic | `a + b`, `a - b`, `a * b`, `a / b`, `a % b`, `-a` |
 | Bitwise NOT | `~a` |
@@ -150,10 +151,11 @@ such as a dereference of a non-pointer value.
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
 
-> **Note on loose type sizes.** Every scalar and every pointer is currently 8 bytes, and
-> an array reserves 8 bytes per element. True widths (`char` = 1, `int` = 4) are a
-> planned phase. `Type::size` and `Type::align` in `src/ast.rs` are the single place
-> this is decided.
+> **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`,
+> pointers, and `void *` are 8. Locals occupy their true size on the stack (aligned to
+> the type), array elements pack at element size, narrow loads sign-extend
+> (`movsx` / `movsxd`), and stores write exactly the value's width. `Type::size` and
+> `Type::align` in `src/ast.rs` are the single place this is decided.
 
 ### Statements and control flow
 
@@ -164,6 +166,7 @@ such as a dereference of a non-pointer value.
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
 | If / else | `if (cond) { ... } else { ... }` |
+| Single-statement bodies | `while (c) x++;`, `if (c) return 1;` |
 | Logical AND / OR | `&&`, `\|\|` |
 | Line comments | `// single-line comment` |
 

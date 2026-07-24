@@ -13,10 +13,6 @@
 //! # Type sizes
 //!
 //! [`Type::size`] and [`Type::align`] are the **single** place type widths are decided.
-//! They currently implement loose sizing: every scalar and every pointer is 8 bytes, and
-//! an array reserves 8 bytes per element. C says otherwise, and the divergence is
-//! intentional. Centralising it here means implementing true widths (`char` = 1,
-//! `int` = 4) is a change to these two methods, not a hunt through the code generator.
 
 use crate::diagnostic::{Span, Spanned};
 
@@ -34,16 +30,21 @@ pub enum Type {
 impl Type {
     pub fn size(&self) -> usize {
         match self {
+            Type::Char => 1,
+            Type::Int => 4,
+            Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
-            _ => 8,
+            Type::Unknown => 8,
         }
     }
 
-    /// Loose alignment: 8 for scalars, element alignment for arrays.
     pub fn align(&self) -> usize {
         match self {
+            Type::Char => 1,
+            Type::Int => 4,
+            Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
-            _ => 8,
+            Type::Unknown => 8,
         }
     }
     /// Array-to-pointer decay: an array used as a value becomes a pointer to its element.
@@ -155,21 +156,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loose_sizes_are_eight_for_scalars() {
-        assert_eq!(Type::Int.size(), 8);
-        assert_eq!(Type::Char.size(), 8);
+    fn scalar_sizes_are_c_widths() {
+        assert_eq!(Type::Int.size(), 4);
+        assert_eq!(Type::Char.size(), 1);
         assert_eq!(Type::Long.size(), 8);
         assert_eq!(Type::Pointer(Box::new(Type::Int)).size(), 8);
     }
 
     #[test]
     fn array_size_is_element_times_len() {
-        assert_eq!(Type::Array(Box::new(Type::Int), 10).size(), 80);
+        assert_eq!(Type::Array(Box::new(Type::Int), 10).size(), 40);
     }
 
     #[test]
-    fn scalar_align_is_eight() {
-        assert_eq!(Type::Int.align(), 8);
+    fn scalar_align_is_c() {
+        assert_eq!(Type::Int.align(), 4);
         assert_eq!(Type::Pointer(Box::new(Type::Char)).align(), 8);
     }
 }

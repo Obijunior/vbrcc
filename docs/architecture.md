@@ -110,9 +110,11 @@ to a type, and an `Array` of a type and a length. The `Type::size` method and th
 are the single place that controls sizes. A later phase can change the sizes in
 one place.
 
-Note: VBRCC uses loose sizing at present. Every scalar type and every pointer is
-8 bytes. An array is 8 bytes for each element. A later phase adds the true sizes
-(`char` = 1, `int` = 4, `long` and pointer = 8).
+Sizes are the real C widths: `char` is 1 byte, `int` is 4, and `long`, pointer,
+and `void` are 8. An array is its element size times its length. Because these two
+methods are the single source of truth, the code generator scales pointer arithmetic
+and array indexing, sizes each stack slot, and picks the load and store width all
+from the same numbers.
 
 ## Stage 4 — Code generator
 

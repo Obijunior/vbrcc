@@ -4,7 +4,9 @@ fn compile(source: &str) -> String {
     let mut lexer = vbrcc::lexer::Lexer::new(source);
     let tokens = lexer.tokenize().unwrap();
     let mut parser = vbrcc::parser::Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let mut program = parser.parse_program().unwrap();
+    // Codegen depends on typeck-annotated `expr.ty` for sized loads/stores.
+    vbrcc::typeck::check(&mut program).unwrap();
     let mut codegen = Codegen::new();
     codegen.generate(&program).unwrap()
 }
@@ -20,8 +22,8 @@ fn test_full_compilation() {
 fn test_full_compilation_variable_roundtrip() {
     let asm = compile("int main() { int x = 7; return x; }");
     assert!(asm.contains("mov rax, 7"));
-    assert!(asm.contains("mov [rbp - 8], rax"));
-    assert!(asm.contains("mov rax, [rbp - 8]"));
+    assert!(asm.contains("mov dword ptr [rbp - 4], rax"));
+    assert!(asm.contains("movsxd rax, dword ptr [rbp - 4]"));
     assert!(asm.contains("ret"));
 }
 
