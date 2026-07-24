@@ -8,8 +8,8 @@ use vbrcc::assembler;
 #[test]
 fn test_assembler_basic_invocation() {
     let asm = ".intel_syntax noprefix\n.globl main\nmain:\n  mov rax, 42\n  ret\n";
-    let (text, data, idata) = assembler::assemble(asm).unwrap();
-    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    let (text, data, idata, entry) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata, entry);
     assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
@@ -65,8 +65,8 @@ main:
   pop rbp
   ret
 "#;
-    let (text, data, idata) = assembler::assemble(asm).unwrap();
-    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    let (text, data, idata, entry) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata, entry);
     assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
@@ -136,8 +136,8 @@ if_1_end:
   jmp loop_0_start
 loop_0_end:
 "#;
-    let (text, data, idata) = assembler::assemble(asm).unwrap();
-    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    let (text, data, idata, entry) = assembler::assemble(asm).unwrap();
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata, entry);
     assert!(!pe.is_empty(), "PE binary should be non-empty");
 }
 
