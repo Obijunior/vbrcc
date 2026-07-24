@@ -27,6 +27,7 @@ pub enum Token {
 
     // literals + identifiers
     IntLiteral(i64),
+    CharLiteral(i64),
     StringLiteral(String),
     // Register(String), <-- commenting to keep the warnings quiet
     Ident(String),
@@ -96,6 +97,7 @@ impl Token {
     pub fn describe(&self) -> String {
         match self {
             Token::IntLiteral(_) => "integer literal".to_string(),
+            Token::CharLiteral(_) => "character literal".to_string(),
             Token::StringLiteral(_) => "string literal".to_string(),
             Token::Ident(_) => "identifier".to_string(),
             Token::Int => "`int`".to_string(),
@@ -198,27 +200,69 @@ impl Lexer {
         while let Some(c) = self.current() {
             if c == '"' { self.advance(); break; }
             if c == '\\' {
-                let esc_start = self.position;
-                self.advance();
-                match self.current() {
-                    Some('n')  => { s.push('\n'); self.advance(); }
-                    Some('t')  => { s.push('\t'); self.advance(); }
-                    Some('"')  => { s.push('"');  self.advance(); }
-                    Some('\\') => { s.push('\\'); self.advance(); }
-                    other => {
-                        let shown = other.map(|c| c.to_string()).unwrap_or_else(|| "<eof>".to_string());
-                        return Err(CompileError::new(
-                            format!("unknown escape sequence `\\{shown}`"),
-                            Span::new(esc_start, self.position + 1),
-                        ))
-                    }
-                }
+                s.push(self.read_escape()?);
             } else {
                 s.push(c);
                 self.advance();
             }
         }
         Ok(Token::StringLiteral(s))
+    }
+
+    fn read_char(&mut self) -> Result<Token, CompileError> {
+        let start = self.position;
+        self.advance(); // consume opening '
+        let value = match self.current() {
+            Some('\\') => self.read_escape()?,       // cursor is on '\', contract holds
+            Some('\'') => {
+                return Err(CompileError::new(
+                    "empty character literal".to_string(),
+                    Span::new(start, self.position + 1),
+                ));
+            }
+            Some(c) => { self.advance(); c }
+            None => {
+                return Err(CompileError::new(
+                    "unterminated character literal".to_string(),
+                    Span::new(start, self.position),
+                ));
+            }
+        };
+        match self.current() {
+            Some('\'') => { self.advance(); }        // consume cl
+            _ => {
+                return Err(CompileError::new(
+                    "expected closing `'` for character literal".to_string(),
+                    Span::new(start, self.position),
+                ));
+            }
+        }
+        return Ok(Token::CharLiteral(value as i64));
+    }
+
+    /// Decode a backslash escape. Cursor must be on the `\`; on return it sits
+    /// just past the escape character. Returns the decoded char.
+    fn read_escape(&mut self) -> Result<char, CompileError> {
+        let esc_start = self.position;
+        self.advance(); // consume '\'
+        let decoded = match self.current() {
+            Some('n')  => '\n',
+            Some('t')  => '\t',
+            Some('r')  => '\r',
+            Some('0')  => '\0',
+            Some('"')  => '"',
+            Some('\'') => '\'',
+            Some('\\') => '\\',
+            other => {
+                let shown = other.map(|c| c.to_string()).unwrap_or_else(|| "<eof>".to_string());
+                return Err(CompileError::new(
+                    format!("unknown escape sequence `\\{shown}`"),
+                    Span::new(esc_start, self.position + 1),
+                ));
+            }
+        };
+        self.advance(); // consume the escape character
+        return Ok(decoded);
     }
 
     fn read_identifier(&mut self) -> Token {
@@ -247,6 +291,7 @@ impl Lexer {
             Some(c) if c.is_ascii_digit() => self.read_number()?,
             Some(c) if c.is_ascii_alphabetic() || c == '_' => self.read_identifier(),
             Some('"') => self.read_string()?,
+            Some('\'') => self.read_char()?,
             Some('(') => { self.advance(); Token::LParen },
             Some(')') => { self.advance(); Token::RParen },
             Some('{') => { self.advance(); Token::LBrace },

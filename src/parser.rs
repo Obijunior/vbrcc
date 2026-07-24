@@ -92,6 +92,21 @@ impl Parser {
         matches!(tok, Token::Int | Token::Char | Token::Long | Token::Void)
     }
 
+    fn parse_block(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+        if self.current() == &Token::LBrace {
+            // Braced body: consume statements until the matching RBrace.
+            self.advance(); // consume '{'
+            let mut stmts = Vec::new();
+            while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+                stmts.push(self.parse_statement()?);
+            }
+            self.expect(&Token::RBrace)?;
+            return Ok(stmts);
+        }
+        // Brace-less body: exactly one statement.
+        return Ok(vec![self.parse_statement()?]);
+    }
+
     fn parse_type(&mut self) -> Result<Type, CompileError> {
         let span = self.current_span();
         let mut ty = match self.advance().clone() {
@@ -322,12 +337,7 @@ impl Parser {
         ));
 
         self.expect(&Token::RParen)?;
-        self.expect(&Token::LBrace)?;
-        let mut body = Vec::new();
-        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-            body.push(self.parse_statement()?);
-        }
-        self.expect(&Token::RBrace)?;
+        let body = self.parse_block()?;
 
         Ok(Spanned::new(Stmt::For { init, cond, update, body }, start.to(self.previous_span())))
     }
@@ -338,12 +348,7 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
-
-        self.expect(&Token::LBrace)?;
-        let mut body = Vec::new();
-        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-            body.push(self.parse_statement()?);
-        }
+        let body = self.parse_block()?;
         self.expect(&Token::RBrace)?;
         Ok(Spanned::new(Stmt::While { cond, body }, start.to(self.previous_span())))
     }
@@ -355,12 +360,7 @@ impl Parser {
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
 
-        self.expect(&Token::LBrace)?;
-        let mut then_branch = Vec::new();
-        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-            then_branch.push(self.parse_statement()?);
-        }
-        self.expect(&Token::RBrace)?;
+        let then_branch = self.parse_block()?;
 
         let else_branch = if self.current() == &Token::Else {
             self.advance();
@@ -474,6 +474,7 @@ impl Parser {
         let start = self.current_span();
         let node = match self.advance().clone() {
             Token::IntLiteral(n) => Expr::IntLiteral(n),
+            Token::CharLiteral(n) => Expr::IntLiteral(n),
             Token::StringLiteral(s) => Expr::StringLiteral(s),
             Token::Ident(name) => {
                 if self.current() == &Token::LParen {
