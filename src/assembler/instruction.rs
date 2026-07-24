@@ -38,6 +38,10 @@ pub enum Instruction {
     MovMemDispReg { base: Register64, disp: i32, src: Register64 },
     MovRegMemDisp { dst: Register64, base: Register64, disp: i32 },
     MovzxReg64Reg8 { dst: Register64, src: Register8 },
+    MovMemDispReg8  { base: Register64, disp: i32, src: Register64 },
+    MovMemDispReg32 { base: Register64, disp: i32, src: Register64 },
+    MovsxReg64Mem8  { dst: Register64, base: Register64, disp: i32 },
+    MovsxdReg64Mem32 { dst: Register64, base: Register64, disp: i32 },
 
     AddRegReg { dst: Register64, src: Register64 },
     AddRegImm32 { dst: Register64, imm: i32 },
@@ -145,6 +149,16 @@ fn parse_mem_operand(op: &str) -> Option<(Register64, i32)> {
         let base = parse_register64(inner)?;
         Some((base, 0))
     }
+}
+
+fn parse_size_prefix(op: &str) -> (Option<u8>, &str) {
+    let s = op.trim();
+    for (kw, w) in [("byte ptr", 1u8), ("dword ptr", 4), ("qword ptr", 8)] {
+        if let Some(rest) = s.strip_prefix(kw) {
+            return (Some(w), rest.trim());
+        }
+    }
+    (None, s)
 }
 
 fn parse_reg_regimm(operands: &[&str], raw: &str) -> Result<(Register64, RegOrImm), String> {
@@ -292,6 +306,18 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 return Err(format!("[ ERROR ] :: mov expects 2 operands: {}", raw));
             }
 
+            let (width, mem_str) = parse_size_prefix(operands[0]);
+            if let Some((base, disp)) = parse_mem_operand(mem_str) {
+                let src = parse_register64(operands[1])
+                    .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
+                let instr = match width {
+                    Some(1) => Instruction::MovMemDispReg8  { base, disp, src },
+                    Some(4) => Instruction::MovMemDispReg32 { base, disp, src },
+                    _       => Instruction::MovMemDispReg   { base, disp, src }, // 8 or unspecified
+                };
+                return Ok(AsmLine::Instruction(instr));
+            }
+
             // mov [base +/- disp], reg
             if let Some((base, disp)) = parse_mem_operand(operands[0]) {
                 let src = parse_register64(operands[1])
@@ -422,6 +448,21 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             let src = parse_register8(operands[1])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
             Ok(AsmLine::Instruction(Instruction::MovzxReg64Reg8 { dst, src }))
+        }
+        "movsx" | "movsxd" => {
+            if operands.len() != 2 {
+                return Err(format!("[ ERROR ] :: {} expects 2 operands: {}", opcode, raw));
+            }
+            let dst = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+            let (_w, mem_str) = parse_size_prefix(operands[1]);
+            let (base, disp) = parse_mem_operand(mem_str)
+                .ok_or_else(|| format!("[ ERROR ] :: {} expects a memory operand: {}", opcode, raw))?;
+            let instr = match opcode {
+                "movsx"  => Instruction::MovsxReg64Mem8   { dst, base, disp },
+                _        => Instruction::MovsxdReg64Mem32 { dst, base, disp },
+            };
+            return Ok(AsmLine::Instruction(instr));
         }
         _ => Err(format!("[ ERROR ] :: unsupported opcode: {}", raw)),
     }

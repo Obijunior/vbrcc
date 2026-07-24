@@ -130,6 +130,13 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::MovzxReg64Reg8 { .. } => 4,
         Instruction::MovMemDispReg { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
         Instruction::MovRegMemDisp { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
+        Instruction::MovMemDispReg8  { base, src, disp } |
+        Instruction::MovMemDispReg32 { base, src, disp } => {
+            let rex_len = if base.ext() || src.ext() { 1 } else { 0 };
+            rex_len + 1 + mem_disp_len(base.low3(), *disp)
+        }
+        Instruction::MovsxReg64Mem8  { base, disp, .. } => 1 + 2 + mem_disp_len(base.low3(), *disp), // REX.W + 0F BE
+        Instruction::MovsxdReg64Mem32 { base, disp, .. } => 1 + 1 + mem_disp_len(base.low3(), *disp), // REX.W + 63
     }
 }
 
@@ -195,7 +202,38 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let m = modrm(0b11, dst.low3(), src.low3());
             vec![r, 0x0F, 0xB6, m]
         }
-
+        
+        Instruction::MovMemDispReg8 { base, disp, src } => {
+            // 0x88 = MOV r/m8, r8. No REX.W. REX only if an extension bit is set.
+            let mut out = Vec::new();
+            if base.ext() || src.ext() { out.push(rex(false, src.ext(), false, base.ext())); }
+            out.push(0x88);
+            out.extend_from_slice(&encode_mem_disp(src.low3(), base.low3(), *disp));
+            out
+        }
+        Instruction::MovMemDispReg32 { base, disp, src } => {
+            // 0x89 = MOV r/m32, r32 when REX.W is absent.
+            let mut out = Vec::new();
+            if base.ext() || src.ext() { out.push(rex(false, src.ext(), false, base.ext())); }
+            out.push(0x89);
+            out.extend_from_slice(&encode_mem_disp(src.low3(), base.low3(), *disp));
+            out
+        }
+        Instruction::MovsxReg64Mem8 { dst, base, disp } => {
+            // REX.W + 0F BE /r = MOVSX r64, r/m8
+            let r = rex(true, dst.ext(), false, base.ext());
+            let mut out = vec![r, 0x0F, 0xBE];
+            out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
+            out
+        }
+        Instruction::MovsxdReg64Mem32 { dst, base, disp } => {
+            // REX.W + 63 /r = MOVSXD r64, r/m32
+            let r = rex(true, dst.ext(), false, base.ext());
+            let mut out = vec![r, 0x63];
+            out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
+            out
+        }
+            
         Instruction::LeaRegMemDisp { dst, base, disp } => {
             // REX.W + 8D /r is LEA r64, m
             let r = rex(true, dst.ext(), false, base.ext());
@@ -779,6 +817,20 @@ mod tests {
         // REX.W=0x48, 0x8D, modrm(mod=01, reg=rax=000, rm=rbp=101)=0x45, disp8=0xF8
         assert_eq!(encode(&instr), vec![0x48, 0x8D, 0x45, 0xF8]);
         assert_eq!(encoded_len(&instr), 4);
+    }
+
+    #[test]
+    fn sized_mem_len_matches_encoding() {
+        use Register64::*;
+        let cases = [
+            Instruction::MovMemDispReg8   { base: Rbp, disp: -8, src: Rax },
+            Instruction::MovMemDispReg32  { base: Rbp, disp: -8, src: Rax },
+            Instruction::MovsxReg64Mem8   { dst: Rax, base: Rbp, disp: -8 },
+            Instruction::MovsxdReg64Mem32 { dst: Rax, base: Rbp, disp: -8 },
+        ];
+        for c in &cases {
+            assert_eq!(encode(c).len(), encoded_len(c), "len mismatch: {:?}", c);
+        }
     }
 }
 
