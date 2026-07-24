@@ -157,6 +157,16 @@ impl Parser {
                     ));
                 }
             };
+            let ptype = if self.current() == &Token::LBracket {
+                self.advance();                                    // consume '['
+                if matches!(self.current(), Token::IntLiteral(_)) {
+                    self.advance();
+                }
+                self.expect(&Token::RBracket)?;
+                Type::Pointer(Box::new(ptype))
+            } else {
+                ptype
+            };
             params.push((ptype, pname));
             if self.current() == &Token::Comma {
                 self.advance();
@@ -349,7 +359,6 @@ impl Parser {
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         let body = self.parse_block()?;
-        self.expect(&Token::RBrace)?;
         Ok(Spanned::new(Stmt::While { cond, body }, start.to(self.previous_span())))
     }
 
@@ -364,13 +373,7 @@ impl Parser {
 
         let else_branch = if self.current() == &Token::Else {
             self.advance();
-            self.expect(&Token::LBrace)?;
-            let mut els = Vec::new();
-            while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-                els.push(self.parse_statement()?);
-            }
-            self.expect(&Token::RBrace)?;
-            els
+            self.parse_block()?
         } else {
             Vec::new()
         };

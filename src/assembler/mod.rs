@@ -224,7 +224,9 @@ fn compute_layout(
     (labels, text_offset, data_offset)
 }
 
-pub fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
+/// Assemble to raw section bytes plus the `.text` offset of `main`, which the PE
+/// writer needs for the entry point. Returns `(text, data, idata, entry_offset)`.
+pub fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, u32), String> {
     let (lines, label_names, _globals) = parse_lines(source)?;
     let (labels, text_offset, data_offset) = compute_layout(&lines, |i| encoder::encoded_len_with_labels(i, &label_names));
 
@@ -237,6 +239,11 @@ pub fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
             }
         }
     }
+
+    let entry_offset = match labels.get("main") {
+        Some((Section::Text, off)) => *off as u32,
+        _ => return Err("no `main` function found".to_string()),
+    };
 
     let text_rva: u32 = 0x1000;
     let data_rva: u32 = (0x1000 + align(text_offset, 0x1000)) as u32;
@@ -283,7 +290,7 @@ pub fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
         }
     }
 
-    Ok((text_section, data_section, idata_section))
+    Ok((text_section, data_section, idata_section, entry_offset))
 }
 
 pub fn assemble_to_obj(source: &str) -> Result<AssembleResult, String> {

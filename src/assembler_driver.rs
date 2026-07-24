@@ -58,8 +58,8 @@ fn assemble_to_pe(asm_path: &Path, out_path: &Path) -> Result<(), String> {
     let source = std::fs::read_to_string(asm_path)
         .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
 
-    let (text, data, idata) = assembler::assemble(&source)?;
-    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata);
+    let (text, data, idata, entry_offset) = assembler::assemble(&source)?;
+    let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata, entry_offset);
 
     std::fs::write(out_path, pe)
         .map_err(|e| format!("Failed to write {:?}: {}", out_path, e))?;

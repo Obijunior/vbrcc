@@ -53,7 +53,7 @@ struct SectionDef<'a> {
     characteristics: u32,
 }
 
-pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &[u8]) -> Vec<u8> {
+pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &[u8], entry_offset: u32) -> Vec<u8> {
     const IMAGE_BASE: u64 = 0x400000;
     const SECTION_ALIGNMENT: u32 = 0x1000;
     const FILE_ALIGNMENT: u32 = 0x200;
@@ -117,7 +117,7 @@ pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &
     let size_of_image = align_up(section_rva, SECTION_ALIGNMENT);
 
     let base_of_code = SECTION_ALIGNMENT;
-    let address_of_entry_point = SECTION_ALIGNMENT;
+    let address_of_entry_point = SECTION_ALIGNMENT + entry_offset;
 
     let mut pe = Vec::new();
 
