@@ -17,8 +17,6 @@
 //!   directives are not implemented, so `#include <stdio.h>` is silently discarded
 //!   rather than rejected. The program compiles, but nothing the header would have
 //!   declared exists.
-//! - Only `//` line comments are recognised. Block comments (`/* */`) are not
-//!   supported and will lex as a division followed by a multiplication.
 
 use crate::diagnostic::{CompileError, Span};
 
@@ -334,6 +332,25 @@ impl Lexer {
                         }
                         return self.next_token(); // get the next token after the comment
                     },
+                    Some('*') => {
+                        self.advance();
+                        loop {
+                            match self.current() {
+                                None => {
+                                    return Err(CompileError::new("unterminated block comment", Span::new(start, self.position)));
+                                }
+                                Some('*') => {
+                                    self.advance();
+                                    if self.current() == Some('/') {
+                                        self.advance();
+                                        break;
+                                    }
+                                }
+                                Some(_) => { self.advance(); }
+                            }
+                        }
+                        return self.next_token();
+                    },
                     _ => Token::Slash,
                 }
             },
@@ -582,5 +599,19 @@ mod tests {
     #[test]
     fn lex_logical_and_still_wins() {
         assert_eq!(lex("&&"), vec![Token::LogicalAnd, Token::EOF]);
+    }
+
+    #[test]
+    fn multi_line_comment_is_skipped() {
+        let src = "int x; /* this is a comment\n spanning multiple lines */ int y;";
+        assert_eq!(lex(src), vec![
+            Token::Int,
+            Token::Ident("x".to_string()),
+            Token::Semicolon,
+            Token::Int,
+            Token::Ident("y".to_string()),
+            Token::Semicolon,
+            Token::EOF,
+        ]);
     }
 }

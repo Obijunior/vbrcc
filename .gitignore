@@ -3,7 +3,8 @@
 /graphify*
 /.vscode
 /docs/superpowers
-/RELEASE_STEPS.md
+/personal guides
+release.sh
 
 # discard artifacts from compilation/testing
 *.o

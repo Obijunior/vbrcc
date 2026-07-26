@@ -72,14 +72,21 @@ $ vbrcc examples/test_return.c -o program
 | `--lld-link` | Built-in assembler emits a COFF `.obj`, then `lld-link` links it | LLVM (`lld-link`, `llvm-dlltool`) + Windows SDK |
 | `--gcc` | System `gcc` assembles and links | MinGW-w64 GCC |
 
-The default path is fully self-contained and is the right choice for programs that call
-nothing external.
+The default path is fully self-contained and needs no external toolchain. It builds a
+runnable PE with a working import table, so programs that call standard-library functions
+exported by `msvcrt.dll` — such as `printf` — run directly:
 
-> **Use `--lld-link` for anything touching the C standard library.** The default backend
-> *builds* a program that calls `printf` without complaint: it emits an import table and
-> reports success. The resulting executable then fails to start, with exit code `127` and
-> no output. Import-table generation is still being developed. Until it lands,
-> `--lld-link` is the working path for `printf` and friends.
+```console
+$ vbrcc examples/input.c -o input
+$ ./input.exe
+hello world - sum: 52
+```
+
+> **Use `--lld-link` for programs that import from more than one DLL.** The default
+> backend's import table currently targets a single DLL (`msvcrt.dll`), so a program that
+> also calls into `kernel32`, `user32`, or the UCRT will not resolve those symbols yet.
+> For multi-DLL programs, `--lld-link` remains the working path. Single-DLL C-runtime
+> calls like `printf` work out of the box.
 
 ### Debugging output
 
@@ -176,13 +183,13 @@ such as a dereference of a non-pointer value.
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
 * Block-level scope. All variables share one flat scope per function
-* Block comments (`/* */`). Only `//` line comments are recognised
 * Preprocessor directives
 
 > **Note: preprocessor directives are skipped, not rejected.** Any line beginning with
 > `#` is discarded by the lexer, so `#include <stdio.h>` compiles without error *and
-> without effect*. Nothing the header would have declared exists. Calls to `printf` link
-> anyway under `--lld-link` because the symbol is resolved from `msvcrt.dll`.
+> without effect*. Nothing the header would have declared exists. Calls to `printf` resolve
+> anyway — the default backend imports the symbol from `msvcrt.dll` directly, and
+> `--lld-link` resolves it the same way.
 
 ## Assembler
 
@@ -209,10 +216,10 @@ The built-in assembler (`src/assembler/`) accepts a small subset of Intel-syntax
 ### Output formats
 
 - **PE executable** (default). Encodes instructions into machine bytes and produces a
-  complete Windows PE32+ image with DOS header, COFF header, section table, and import
-  table. Self-contained programs work today. The import-table path for external calls
-  such as `printf` is written but does not yet produce a loadable image, so use
-  `--lld-link` for those.
+  complete, loadable Windows PE32+ image with DOS header, COFF header, section table, and a
+  working import table. External calls into `msvcrt.dll` (such as `printf`) resolve through
+  that import table and run. The table currently targets a single DLL, so programs that
+  also import from other DLLs (`kernel32`, `user32`, the UCRT) still need `--lld-link`.
 - **COFF object** (used by `--lld-link`). Emits a relocatable object file with a symbol
   table and `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to resolve.
 
@@ -255,11 +262,12 @@ cargo test
 - Pointers, address-of, dereference, and pointer arithmetic
 - Arrays and array indexing
 - Cast expressions
+- A built-in PE import table: single-DLL libc calls (`printf` and friends via `msvcrt.dll`)
+  run through the default backend with no `--lld-link`
 
 **Next**
 
-- Fix the built-in PE import table, so `printf` works without `--lld-link`
-- True type widths (`char` = 1, `int` = 4)
+- Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
 - `struct`, `union`, `enum`, and `typedef`
 - More control flow: `switch`, `do-while`, `break`, `continue`
 - Preprocessor: `#include`, `#define`

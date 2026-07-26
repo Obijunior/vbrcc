@@ -111,7 +111,7 @@
 //!
 //! Not yet implemented: `struct`, `union`, `enum`, `typedef`, `unsigned`, `float`,
 //! `double`, `switch`, `do`/`while`, `break`, `continue`, block-level scope
-//! (all variables share one flat scope), and block comments (`/* */`).
+//! (all variables share one flat scope)
 //!
 //! Two behaviours are worth calling out explicitly, because they fail quietly rather
 //! than loudly:
