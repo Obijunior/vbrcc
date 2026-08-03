@@ -170,6 +170,18 @@ impl Lexer {
         Lexer { input, position: start.min(end), file, end }
     }
 
+    /// The preprocessor keeps one lexer per open file and moves its window with
+    /// [`Lexer::retarget`], rather than rebuilding a lexer per line.
+    pub fn from_chars(input: Vec<char>, file: FileId) -> Self {
+        Lexer { input, position: 0, file, end: 0 }
+    }
+
+    /// Point this lexer at `[start, end)` of the buffer it already holds.
+    pub fn retarget(&mut self, start: usize, end: usize) {
+        self.end = end.min(self.input.len());
+        self.position = start.min(self.end);
+    }
+
 
     fn current(&self) -> Option<char> {
         if self.position >= self.end {

@@ -104,6 +104,14 @@ fn main() {
     #[cfg(windows)]
     enable_ansi();
 
+    // --- Stage 0: Preprocess ---
+    let spanned_tokens = preprocessor::Preprocessor::new(&mut sources)
+        .run(main_file)
+        .unwrap_or_else(|e| {
+            eprint!("{}", diagnostic::render(&sources, &e, use_color));
+            process::exit(1);
+        });
+
     // --- Stage 1: Lex ---
     let mut lexer = lexer::Lexer::for_region(&source, main_file, 0, source.chars().count());
     let spanned_tokens = lexer.tokenize().unwrap_or_else(|e| {
