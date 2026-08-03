@@ -166,8 +166,10 @@ fn paint(text: &str, code: &str, use_color: bool) -> String {
 }
 
 /// Render a diagnostic as a rustc-style frame ending in a newline.
-pub fn render(filename: &str, source: &str, err: &CompileError, use_color: bool) -> String {
-    let chars: Vec<char> = source.chars().collect();
+pub fn render(map: &SourceMap, err: &CompileError, use_color: bool) -> String {
+    let file = map.file(err.span.file);
+    let filename = &file.name;
+    let chars: Vec<char> = file.text.chars().collect();
     let start = err.span.start.min(chars.len());
 
     let mut line_start = 0;
@@ -282,7 +284,7 @@ mod tests {
         let brace = source.find('}').unwrap(); // offset 23
         let err = CompileError::new("expected `;`, found `}`", Span::new(brace, brace + 1))
             .with_label("expected `;` here");
-        let out = render("prog.c", source, &err, false);
+        let out = render(&SourceMap::single("prog.c", source), &err, false);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "error: expected `;`, found `}`");
         assert_eq!(lines[1], "  --> prog.c:1:24");
@@ -307,7 +309,7 @@ mod tests {
         let y_off = source.find('y').unwrap();
         let err = CompileError::new("undefined variable `y`", Span::new(y_off, y_off + 1))
             .with_label("not found in this scope");
-        let out = render("prog.c", source, &err, false);
+        let out = render(&SourceMap::single("prog.c", source), &err, false);
         assert!(out.contains("--> prog.c:2:16"), "got:\n{out}");
         assert!(out.contains("    return x + y;"), "got:\n{out}");
         assert!(out.contains("^ not found in this scope"), "got:\n{out}");
@@ -317,8 +319,9 @@ mod tests {
     fn render_color_wraps_in_ansi_but_plain_does_not() {
         let source = "x";
         let err = CompileError::new("bad", Span::new(0, 1));
-        assert!(!render("f", source, &err, false).contains('\u{1b}'));
-        assert!(render("f", source, &err, true).contains('\u{1b}'));
+        let map = SourceMap::single("f", source);
+        assert!(!render(&map, &err, false).contains('\u{1b}'));
+        assert!(render(&map, &err, true).contains('\u{1b}'));
     }
 
         #[test]
@@ -375,5 +378,22 @@ mod tests {
     fn spans_still_compare_equal_across_files() {
         // AST structural equality depends on this staying true.
         assert_eq!(Span::in_file(0, 0, 3), Span::in_file(7, 10, 42));
+    }
+
+    #[test]
+    fn render_points_at_the_file_the_span_names() {
+        let mut map = SourceMap::new();
+        map.add("prog.c", "int main() { return 0; }".to_string());
+        let header = map.add("stdio.h", "int printf(bad);".to_string());
+
+        // An error in the header must render against the header, not prog.c.
+        let off = map.file(header).text.find("bad").unwrap();
+        let err = CompileError::new("expected a type, found `bad`",
+                                    Span::in_file(header, off, off + 3));
+        let out = render(&map, &err, false);
+
+        assert!(out.contains("--> stdio.h:1:12"), "got:\n{out}");
+        assert!(out.contains("int printf(bad);"), "got:\n{out}");
+        assert!(!out.contains("prog.c"), "leaked the wrong file:\n{out}");
     }
 }

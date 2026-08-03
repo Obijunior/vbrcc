@@ -103,6 +103,10 @@ fn main() {
         process::exit(1);
     });
 
+    // Every file the compiler reads is registered here; a Span's FileId indexes into it. The input file is always id 0.
+    let mut sources = diagnostic::SourceMap::new();
+    let main_file = sources.add(input_path.display().to_string(), source.clone());
+
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr());
     #[cfg(windows)]
     enable_ansi();
@@ -110,7 +114,7 @@ fn main() {
     // --- Stage 1: Lex ---
     let mut lexer = lexer::Lexer::new(&source);
     let spanned_tokens = lexer.tokenize().unwrap_or_else(|e| {
-        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
     });
 
@@ -124,7 +128,7 @@ fn main() {
     // --- Stage 2: Parse ---
     let mut parser = parser::Parser::new(spanned_tokens);
     let mut program = parser.parse_program().unwrap_or_else(|e| {
-        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
     });
 
@@ -135,14 +139,14 @@ fn main() {
 
     // --- Stage 2.5: Type check ---
     typeck::check(&mut program).unwrap_or_else(|e| {
-        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
     });
 
     // --- Stage 3: Codegen ---
     let mut codegen = codegen::Codegen::new();
     let asm = codegen.generate(&program).unwrap_or_else(|e| {
-        eprint!("{}", diagnostic::render(&input_path.display().to_string(), &source, &e, use_color));
+        eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
     });
 
