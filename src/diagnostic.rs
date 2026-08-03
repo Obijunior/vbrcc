@@ -83,6 +83,7 @@ impl SourceMap {
 
 #[derive(Clone, Debug, Copy)]
 pub struct Span {
+    pub file: FileId,
     pub start: usize,
     pub end: usize,
 }
@@ -95,17 +96,26 @@ impl PartialEq for Span {
 impl Eq for Span {}
 
 impl Span {
+    /// A span in file `0` — the file named on the command line.
+    ///
+    /// Kept two-argument on purpose so every pre-preprocessor call site still
+    /// compiles. Anything that can see more than one file must use
+    /// [`Span::in_file`].
     pub fn new(start: usize, end: usize) -> Self {
-        Span { start, end }
+        Span { file: 0, start, end }
+    }
+
+    pub fn in_file(file: FileId, start: usize, end: usize) -> Self {
+        Span { file, start, end }
     }
 
     pub fn dummy() -> Self {
-        Span { start: 0, end: 0 }
+        Span { file: 0, start: 0, end: 0 }
     }
 
-    /// Join two spans: start of `self`, end of `other`.
+    /// Join two spans: start of `self`, end of `other`. Keeps `self`'s file.
     pub fn to(self, other: Span) -> Span {
-        Span { start: self.start, end: other.end }
+        Span { file: self.file, start: self.start, end: other.end }
     }
 }
 
@@ -334,5 +344,36 @@ mod tests {
         // render() must never panic on a malformed span, so file() falls back.
         let map = SourceMap::single("prog.c", "x");
         assert_eq!(map.file(99).name, "<unknown>");
+    }
+
+        #[test]
+    fn span_new_defaults_to_file_zero() {
+        let s = Span::new(3, 7);
+        assert_eq!(s.file, 0);
+        assert_eq!(s.start, 3);
+        assert_eq!(s.end, 7);
+    }
+
+    #[test]
+    fn span_in_file_records_the_file() {
+        let s = Span::in_file(4, 10, 12);
+        assert_eq!(s.file, 4);
+        assert_eq!(s.start, 10);
+        assert_eq!(s.end, 12);
+    }
+
+    #[test]
+    fn span_to_keeps_the_left_hand_file() {
+        // Joining across files is nonsense, but must not silently retarget.
+        let joined = Span::in_file(2, 3, 5).to(Span::in_file(9, 9, 14));
+        assert_eq!(joined.file, 2);
+        assert_eq!(joined.start, 3);
+        assert_eq!(joined.end, 14);
+    }
+
+    #[test]
+    fn spans_still_compare_equal_across_files() {
+        // AST structural equality depends on this staying true.
+        assert_eq!(Span::in_file(0, 0, 3), Span::in_file(7, 10, 42));
     }
 }
