@@ -18,7 +18,7 @@
 //!   rather than rejected. The program compiles, but nothing the header would have
 //!   declared exists.
 
-use crate::diagnostic::{CompileError, Span};
+use crate::diagnostic::{CompileError, Span, FileId};
 
 #[derive(Debug, Clone, PartialEq)]  // so we can use '{:?}' and compare tokens. Clone for duplicating tokens when needed.
 pub enum Token {
@@ -148,18 +148,33 @@ impl Token {
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
+    file: FileId,
+    end: usize,
 }
 
 impl Lexer {
 
     pub fn new(source: &str) -> Self {
-        Lexer {
-            input: source.chars().collect(),
-            position: 0,
-        }
+        let len = source.chars().count();
+        Lexer::for_region(source, 0, 0, len)
     }
 
+    /// Lex `source[start..end]`, stamping every span with `file`.
+    ///
+    /// `position` stays an **absolute** index into the whole of `source`, so the
+    /// spans this produces are already in the file's coordinate system — no
+    /// offset arithmetic needed at the call site.
+    pub fn for_region(source: &str, file: FileId, start: usize, end: usize) -> Self {
+        let input: Vec<char> = source.chars().collect();
+        let end = end.min(input.len());
+        Lexer { input, position: start.min(end), file, end }
+    }
+
+
     fn current(&self) -> Option<char> {
+        if self.position >= self.end {
+            return None;
+        }
         self.input.get(self.position).copied()
     }
     
@@ -186,7 +201,7 @@ impl Lexer {
         let value: i64 = num.parse().map_err(|_| {
             CompileError::new(
                 format!("integer literal `{num}` out of range for i64"),
-                Span::new(start, self.position),
+                Span::in_file(self.file, start, self.position),
             )
         })?;
         Ok(Token::IntLiteral(value))
@@ -215,14 +230,14 @@ impl Lexer {
             Some('\'') => {
                 return Err(CompileError::new(
                     "empty character literal".to_string(),
-                    Span::new(start, self.position + 1),
+                    Span::in_file(self.file, start, self.position + 1),
                 ));
             }
             Some(c) => { self.advance(); c }
             None => {
                 return Err(CompileError::new(
                     "unterminated character literal".to_string(),
-                    Span::new(start, self.position),
+                    Span::in_file(self.file, start, self.position),
                 ));
             }
         };
@@ -231,7 +246,7 @@ impl Lexer {
             _ => {
                 return Err(CompileError::new(
                     "expected closing `'` for character literal".to_string(),
-                    Span::new(start, self.position),
+                    Span::in_file(self.file, start, self.position),
                 ));
             }
         }
@@ -255,7 +270,7 @@ impl Lexer {
                 let shown = other.map(|c| c.to_string()).unwrap_or_else(|| "<eof>".to_string());
                 return Err(CompileError::new(
                     format!("unknown escape sequence `\\{shown}`"),
-                    Span::new(esc_start, self.position + 1),
+                    Span::in_file(self.file, esc_start, self.position + 1),
                 ));
             }
         };
@@ -337,7 +352,7 @@ impl Lexer {
                         loop {
                             match self.current() {
                                 None => {
-                                    return Err(CompileError::new("unterminated block comment", Span::new(start, self.position)));
+                                    return Err(CompileError::new("unterminated block comment", Span::in_file(self.file, start, self.position)));
                                 }
                                 Some('*') => {
                                     self.advance();
@@ -422,22 +437,37 @@ impl Lexer {
                 self.advance();
                 return Err(CompileError::new(
                     format!("unexpected character `{other}`"),
-                    Span::new(start, self.position),
+                    Span::in_file(self.file, start, self.position),
                 ));
             }
         };
-        Ok(SpannedToken { token, span: Span::new(start, self.position) })
+        Ok(SpannedToken { token, span: Span::in_file(self.file, start, self.position) })
     }
 
-    // For testing: tokenize entire input at once
-    pub fn tokenize(&mut self) -> Result<Vec<SpannedToken>, CompileError> {
+    /// Tokenize to the end of this lexer's region, **without** a trailing `EOF`.
+    ///
+    /// The preprocessor calls this once per line and appends a single `EOF` after
+    /// the last file; an `EOF` per region would terminate the parser early.
+    pub fn tokenize_region(&mut self) -> Result<Vec<SpannedToken>, CompileError> {
         let mut tokens = Vec::new();
         loop {
             let st = self.next_token()?;
-            let is_eof = st.token == Token::EOF;
+            if st.token == Token::EOF {
+                break;
+            }
             tokens.push(st);
-            if is_eof { break; }
         }
+        Ok(tokens)
+    }
+
+    /// Tokenize the whole region and append `Token::EOF`.
+    pub fn tokenize(&mut self) -> Result<Vec<SpannedToken>, CompileError> {
+        let mut tokens = self.tokenize_region()?;
+        let at = self.position.min(self.end);
+        tokens.push(SpannedToken {
+            token: Token::EOF,
+            span: Span::in_file(self.file, at, at),
+        });
         Ok(tokens)
     }
 
@@ -613,5 +643,42 @@ mod tests {
             Token::Semicolon,
             Token::EOF,
         ]);
+    }
+      #[test]
+    fn for_region_stops_at_the_end_bound() {
+        //            0123456789...
+        let src = "int x; int y;";
+        let mut lx = Lexer::for_region(src, 0, 0, 6);
+        let toks: Vec<Token> = lx.tokenize_region().unwrap().into_iter().map(|t| t.token).collect();
+        assert_eq!(toks, vec![Token::Int, Token::Ident("x".to_string()), Token::Semicolon]);
+    }
+
+    #[test]
+    fn for_region_spans_are_absolute_file_offsets() {
+        let src = "int x; int y;";
+        let start = src.find("int y").unwrap(); // 7
+        let mut lx = Lexer::for_region(src, 3, start, src.chars().count());
+        let toks = lx.tokenize_region().unwrap();
+        assert_eq!(toks[0].token, Token::Int);
+        assert_eq!(toks[0].span.file, 3, "region must stamp the file id");
+        assert_eq!(toks[0].span.start, start, "spans are file offsets, not slice offsets");
+    }
+
+    #[test]
+    fn tokenize_region_omits_eof_but_tokenize_keeps_it() {
+        let src = "int x;";
+        let region = Lexer::for_region(src, 0, 0, src.chars().count())
+            .tokenize_region().unwrap();
+        assert_ne!(region.last().unwrap().token, Token::EOF);
+
+        let whole = Lexer::new(src).tokenize().unwrap();
+        assert_eq!(whole.last().unwrap().token, Token::EOF);
+    }
+
+    #[test]
+    fn lexer_new_still_means_whole_file_zero() {
+        let toks = Lexer::new("int x;").tokenize().unwrap();
+        assert_eq!(toks[0].span.file, 0);
+        assert_eq!(toks[0].span.start, 0);
     }
 }

@@ -112,7 +112,7 @@ fn main() {
     enable_ansi();
 
     // --- Stage 1: Lex ---
-    let mut lexer = lexer::Lexer::new(&source);
+    let mut lexer = lexer::Lexer::for_region(&source, main_file, 0, source.chars().count());
     let spanned_tokens = lexer.tokenize().unwrap_or_else(|e| {
         eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
