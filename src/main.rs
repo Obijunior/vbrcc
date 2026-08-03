@@ -18,14 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-mod ast;
-mod lexer;
-mod parser;
-mod codegen;
-mod assembler;
-mod assembler_driver;
-mod diagnostic;
-mod typeck;
+use vbrcc::{lexer, parser, codegen, assembler_driver, diagnostic, typeck};
 
 #[cfg(windows)]
 fn enable_ansi() {
