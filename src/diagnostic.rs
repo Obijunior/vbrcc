@@ -23,6 +23,63 @@
 //!   Compare `span.start` and `span.end` individually instead.
 
 use std::ops::Deref;
+use std::sync::OnceLock;
+
+/// Index of a file in a [`SourceMap`].
+pub type FileId = u32;
+
+/// One source file: the name to print in diagnostics, and its full text.
+#[derive(Clone, Debug)]
+pub struct SourceFile {
+    pub name: String,
+    pub text: String,
+}
+
+/// Every file the compiler has read, indexed by [`FileId`].
+///
+/// The preprocessor registers each `#include`d file here, so a [`Span`] carrying
+/// a `FileId` can always be resolved back to the text it came from.
+#[derive(Clone, Debug, Default)]
+pub struct SourceMap {
+    files: Vec<SourceFile>,
+}
+
+impl SourceMap {
+    pub fn new() -> SourceMap {
+        SourceMap { files: Vec::new() }
+    }
+
+    /// Register a file and return its id. Ids are assigned in insertion order,
+    /// so the first file added is always `0`.
+    pub fn add(&mut self, name: impl Into<String>, text: String) -> FileId {
+        let id = self.files.len() as FileId;
+        self.files.push(SourceFile { name: name.into(), text });
+        id
+    }
+
+    /// Look up a file. An id that was never issued yields a placeholder rather
+    /// than panicking — `render` must not blow up on a malformed span.
+    pub fn file(&self, id: FileId) -> &SourceFile {
+        match self.files.get(id as usize) {
+            Some(f) => f,
+            None => {
+                static UNKNOWN: OnceLock<SourceFile> = OnceLock::new();
+                UNKNOWN.get_or_init(|| SourceFile {
+                    name: "<unknown>".to_string(),
+                    text: String::new(),
+                })
+            }
+        }
+    }
+
+    /// A one-file map. Convenience for tests and for callers that never include.
+    pub fn single(name: &str, text: &str) -> SourceMap {
+        let mut map = SourceMap::new();
+        map.add(name, text.to_string());
+        map
+    }
+}
+
 
 #[derive(Clone, Debug, Copy)]
 pub struct Span {
@@ -252,5 +309,30 @@ mod tests {
         let err = CompileError::new("bad", Span::new(0, 1));
         assert!(!render("f", source, &err, false).contains('\u{1b}'));
         assert!(render("f", source, &err, true).contains('\u{1b}'));
+    }
+
+        #[test]
+    fn source_map_add_returns_sequential_ids() {
+        let mut map = SourceMap::new();
+        let a = map.add("a.c", "int a;".to_string());
+        let b = map.add("b.h", "int b;".to_string());
+        assert_eq!(a, 0);
+        assert_eq!(b, 1);
+        assert_eq!(map.file(a).name, "a.c");
+        assert_eq!(map.file(b).text, "int b;");
+    }
+
+    #[test]
+    fn source_map_single_builds_a_one_file_map() {
+        let map = SourceMap::single("prog.c", "int main() {}");
+        assert_eq!(map.file(0).name, "prog.c");
+        assert_eq!(map.file(0).text, "int main() {}");
+    }
+
+    #[test]
+    fn source_map_unknown_id_does_not_panic() {
+        // render() must never panic on a malformed span, so file() falls back.
+        let map = SourceMap::single("prog.c", "x");
+        assert_eq!(map.file(99).name, "<unknown>");
     }
 }
