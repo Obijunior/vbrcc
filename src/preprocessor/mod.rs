@@ -5,6 +5,7 @@
 //! the parser consumes.
 
 pub mod normalize;
+pub mod macros;
 
 use std::collections::VecDeque;
 
