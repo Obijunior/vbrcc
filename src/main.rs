@@ -18,7 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use vbrcc::{lexer, parser, codegen, assembler_driver, diagnostic, typeck, preprocessor};
+use vbrcc::{parser, codegen, assembler_driver, diagnostic, typeck, preprocessor};
 
 #[cfg(windows)]
 fn enable_ansi() {
@@ -111,13 +111,6 @@ fn main() {
             eprint!("{}", diagnostic::render(&sources, &e, use_color));
             process::exit(1);
         });
-
-    // --- Stage 1: Lex ---
-    let mut lexer = lexer::Lexer::for_region(&source, main_file, 0, source.chars().count());
-    let spanned_tokens = lexer.tokenize().unwrap_or_else(|e| {
-        eprint!("{}", diagnostic::render(&sources, &e, use_color));
-        process::exit(1);
-    });
 
     if std::env::var("DUMP_TOKENS").is_ok() {
         eprintln!("=== TOKENS ===");

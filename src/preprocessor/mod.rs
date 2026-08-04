@@ -7,10 +7,11 @@
 pub mod normalize;
 pub mod macros;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::diagnostic::{CompileError, FileId, Span, SourceMap};
 use crate::lexer::{Lexer, SpannedToken, Token};
+use macros::{MacroTable, MacroDef, MacroKind};
 use normalize::normalize;
 
 /// One open file: its normalized text, how far we have read, and a lexer
@@ -46,11 +47,20 @@ impl FileState {
     }
 }
 
+/// An item queued for the parser. The sentinel marks where a macro's expansion
+/// ends, so the recursion guard un-paints the name at exactly the right moment.
+enum PendingItem {
+    Tok(SpannedToken),
+    EndExpansion(String),
+}
+
 pub struct Preprocessor<'a> {
     #[allow(dead_code)]
     map: &'a mut SourceMap,
+    macros: MacroTable,
     stack: Vec<FileState>,
-    pending: VecDeque<SpannedToken>,
+    pending: VecDeque<PendingItem>,
+    active: HashSet<String>,
     out: Vec<SpannedToken>,
     entry: FileId,
 }
@@ -59,8 +69,10 @@ impl<'a> Preprocessor<'a> {
     pub fn new(map: &'a mut SourceMap) -> Preprocessor<'a> {
         Preprocessor {
             map,
+            macros: MacroTable::new(),
             stack: Vec::new(),
             pending: VecDeque::new(),
+            active: HashSet::new(),
             out: Vec::new(),
             entry: 0,
         }
@@ -73,6 +85,12 @@ impl<'a> Preprocessor<'a> {
         self.stack.push(FileState::new(entry, &text));
 
         while let Some(tok) = self.next_raw()? {
+            if let Token::Ident(name) = &tok.token {
+                let name = name.clone();
+                if self.try_expand(&name, tok.span) {
+                    continue;
+                }
+            }
             self.out.push(tok);
         }
 
@@ -83,11 +101,44 @@ impl<'a> Preprocessor<'a> {
         Ok(self.out)
     }
 
+    /// Expand `name` if it is a macro that is not already being expanded.
+    /// Returns whether anything was pushed.
+    fn try_expand(&mut self, name: &str, use_site: Span) -> bool {
+        if self.active.contains(name) {
+            return false;
+        }
+        let body = match self.macros.get(name) {
+            None => return false,
+            Some(def) => match &def.kind {
+                MacroKind::Object { body } => body.clone(),
+            },
+        };
+
+        self.active.insert(name.to_string());
+
+        // Push the body then the sentinel onto the FRONT, preserving order, so
+        // the result is rescanned before any input that follows it.
+        self.pending.push_front(PendingItem::EndExpansion(name.to_string()));
+        for tok in body.into_iter().rev() {
+            // Expanded tokens report at the call site, not at the #define.
+            self.pending.push_front(PendingItem::Tok(SpannedToken {
+                token: tok.token,
+                span: use_site,
+            }));
+        }
+        true
+    }
+
     /// The next token, before macro expansion. Runs the line loop as needed.
     fn next_raw(&mut self) -> Result<Option<SpannedToken>, CompileError> {
         loop {
-            if let Some(tok) = self.pending.pop_front() {
-                return Ok(Some(tok));
+            while let Some(item) = self.pending.pop_front() {
+                match item {
+                    PendingItem::EndExpansion(name) => {
+                        self.active.remove(&name);
+                    }
+                    PendingItem::Tok(tok) => return Ok(Some(tok)),
+                }
             }
 
             let (start, end, at_eof) = match self.stack.last_mut() {
@@ -117,14 +168,116 @@ impl<'a> Preprocessor<'a> {
                     let st = self.stack.last_mut().expect("stack non-empty");
                     st.lexer.retarget(start, end);
                     let toks = st.lexer.tokenize_region()?;
-                    self.pending.extend(toks);
+                    self.pending.extend(toks.into_iter().map(PendingItem::Tok));
                 }
             }
         }
     }
 
-    /// Handle a directive body running from `from` to `end` (the `#` is consumed).
-    fn directive(&mut self, _from: usize, _end: usize) -> Result<(), CompileError> {
+    fn directive(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
+        let st = self.stack.last().expect("stack non-empty");
+        let file = st.file;
+
+        let mut i = from;
+        while i < end && st.chars[i].is_whitespace() {
+            i += 1;
+        }
+        let name_start = i;
+        while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+            i += 1;
+        }
+        let name: String = st.chars[name_start..i].iter().collect();
+
+        match name.as_str() {
+            // A `#` on a line by itself is the null directive: legal, ignored.
+            "" => Ok(()),
+            "define" => self.define(i, end),
+            "undef" => self.undef(i, end),
+            // TEMPORARY (Phase 4 implements this): skipping preserves the
+            // behaviour the lexer had before the preprocessor existed, so the
+            // examples that `#include <stdio.h>` keep compiling.
+            "include" => Ok(()),
+            "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif" | "error"
+            | "warning" | "pragma" | "line" => Err(CompileError::new(
+                format!("`#{name}` is not yet supported"),
+                Span::in_file(file, name_start, i),
+            )),
+            other => Err(CompileError::new(
+                format!("invalid preprocessing directive `#{other}`"),
+                Span::in_file(file, name_start, i),
+            )),
+        }
+    }
+
+    /// `#define NAME body…`  (object-like only in this phase)
+    fn define(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
+        let (file, name, name_start, name_end) = {
+            let st = self.stack.last().expect("stack non-empty");
+            let mut i = from;
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            let start = i;
+            while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+                i += 1;
+            }
+            (st.file, st.chars[start..i].iter().collect::<String>(), start, i)
+        };
+
+        if name.is_empty() {
+            return Err(CompileError::new(
+                "macro name missing",
+                Span::in_file(file, from.saturating_sub(1), end.max(from)),
+            ));
+        }
+
+        // A `(` touching the name means function-like — Phase 2.
+        let st = self.stack.last().expect("stack non-empty");
+        if name_end < end && st.chars[name_end] == '(' {
+            return Err(CompileError::new(
+                "function-like macros are not yet supported",
+                Span::in_file(file, name_start, name_end),
+            ));
+        }
+
+        let body = {
+            let st = self.stack.last_mut().expect("stack non-empty");
+            st.lexer.retarget(name_end, end);
+            st.lexer.tokenize_region()?
+        };
+
+        self.macros.define(
+            &name,
+            MacroDef {
+                kind: MacroKind::Object { body },
+                name_span: Span::in_file(file, name_start, name_end),
+            },
+        );
+        Ok(())
+    }
+
+    /// `#undef NAME`
+    fn undef(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
+        let (file, name, start, stop) = {
+            let st = self.stack.last().expect("stack non-empty");
+            let mut i = from;
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            let s = i;
+            while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+                i += 1;
+            }
+            (st.file, st.chars[s..i].iter().collect::<String>(), s, i)
+        };
+
+        if name.is_empty() {
+            return Err(CompileError::new(
+                "macro name missing",
+                Span::in_file(file, start, stop.max(start + 1)),
+            ));
+        }
+        self.macros.undef(&name);
         Ok(())
     }
 }
@@ -183,5 +336,87 @@ mod tests {
         let err = pp(src).unwrap_err();
         assert!(err.message.contains('@'), "got: {}", err.message);
         assert_eq!(err.span.start, src.find('@').unwrap());
+    }
+
+    #[test]
+    fn object_macro_is_substituted() {
+        assert_eq!(kinds("#define N 10\nint a[N];"), kinds("int a[10];"));
+    }
+
+    #[test]
+    fn macro_with_a_multi_token_body_expands_in_order() {
+        assert_eq!(kinds("#define P 1 + 2\nint x = P;"), kinds("int x = 1 + 2;"));
+    }
+
+    #[test]
+    fn macro_with_an_empty_body_vanishes() {
+        assert_eq!(kinds("#define NOTHING\nint NOTHING x;"), kinds("int x;"));
+    }
+
+    #[test]
+    fn undefined_after_undef() {
+        assert_eq!(kinds("#define N 10\n#undef N\nint N;"), kinds("int N;"));
+    }
+
+    #[test]
+    fn expansion_is_rescanned() {
+        // B expands to A, which must then expand to 7.
+        assert_eq!(kinds("#define A 7\n#define B A\nint x = B;"), kinds("int x = 7;"));
+    }
+
+    #[test]
+    fn self_referential_macro_terminates() {
+        // C says `#define foo foo` expands once and is then left alone.
+        assert_eq!(kinds("#define foo foo\nint foo;"), kinds("int foo;"));
+    }
+
+    #[test]
+    fn mutually_recursive_macros_terminate() {
+        let out = kinds("#define X Y\n#define Y X\nint X;");
+        assert_eq!(out, kinds("int X;"));
+    }
+
+    #[test]
+    fn a_macro_name_inside_a_string_is_not_expanded() {
+        let toks = pp("#define N 10\nchar *s = \"N\";").unwrap();
+        assert!(toks.iter().any(|t| t.token == Token::StringLiteral("N".to_string())),
+                "string literal must survive verbatim: {toks:?}");
+    }
+
+    #[test]
+    fn a_longer_identifier_containing_a_macro_name_is_not_expanded() {
+        assert_eq!(kinds("#define MAX 1\nint MAXIMUM;"), kinds("int MAXIMUM;"));
+    }
+
+    #[test]
+    fn expanded_tokens_carry_the_use_site_span() {
+        let src = "#define N 10\nint a = N;";
+        let toks = pp(src).unwrap();
+        let ten = toks.iter().find(|t| t.token == Token::IntLiteral(10)).unwrap();
+        assert_eq!(ten.span.start, src.rfind('N').unwrap(),
+                   "an error in an expansion must point at the call, not the #define");
+    }
+
+    #[test]
+    fn multi_line_macro_body_via_continuation() {
+        assert_eq!(kinds("#define P 1 + \\\n    2\nint x = P;"), kinds("int x = 1 + 2;"));
+    }
+
+    #[test]
+    fn function_like_define_is_rejected_for_now() {
+        let err = pp("#define F(x) x\nint y;").unwrap_err();
+        assert!(err.message.contains("function-like"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn define_without_a_name_is_an_error() {
+        let err = pp("#define\n").unwrap_err();
+        assert!(err.message.contains("macro name"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn include_is_still_skipped_silently() {
+        // Phase 4 implements this; until then it must behave as it does today.
+        assert_eq!(kinds("#include <stdio.h>\nint x;"), kinds("int x;"));
     }
 }
