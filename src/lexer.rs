@@ -13,10 +13,16 @@
 //! - `=` and `==` produce distinct tokens (`Token::Assign` and `Token::Equals`). The
 //!   parser depends on that distinction to tell an assignment from an equality test, and
 //!   collapsing them produces confusing downstream errors.
-//! - Lines beginning with `#` are **skipped as if they were comments**. Preprocessor
-//!   directives are not implemented, so `#include <stdio.h>` is silently discarded
-//!   rather than rejected. The program compiles, but nothing the header would have
-//!   declared exists.
+//! - A `#` reaching the lexer is a **hard error**. Directive lines are consumed by
+//!   [`crate::preprocessor`] before the lexer ever sees them, so a stray `#` means
+//!   either a `#` in the middle of a line or a preprocessor bug.
+//! - The lexer is no longer stage 1. The preprocessor owns the read loop and calls
+//!   [`Lexer::for_region`] / [`Lexer::retarget`] to tokenize one logical line at a
+//!   time. [`Lexer::new`] still tokenizes a whole string as file 0, which is what
+//!   the tests use.
+//! - [`Lexer::tokenize`] appends `Token::EOF`; [`Lexer::tokenize_region`] does not.
+//!   The preprocessor needs the latter, since one `EOF` per line would end the
+//!   parse early.
 
 use crate::diagnostic::{CompileError, Span, FileId};
 
@@ -141,6 +147,63 @@ impl Token {
             Token::GreaterThan => "`>`".to_string(),
             Token::GreaterThanEquals => "`>=`".to_string(),
             Token::EOF => "end of file".to_string(),
+        }
+    }
+
+    /// Render this token back to C source text, for `-E` output.
+    ///
+    /// Mirrors [`Token::describe`], but without the surrounding backticks:
+    /// `describe` is for prose inside a diagnostic, this is for text a C
+    /// compiler could re-read.
+    pub fn to_source(&self) -> String {
+        match self {
+            Token::IntLiteral(v) => v.to_string(),
+            Token::CharLiteral(v) => format!("'{}'", (*v as u8) as char),
+            Token::StringLiteral(s) => format!("\"{s}\""),
+            Token::Ident(name) => name.clone(),
+            Token::Int => "int".to_string(),
+            Token::Char => "char".to_string(),
+            Token::Long => "long".to_string(),
+            Token::Void => "void".to_string(),
+            Token::Return => "return".to_string(),
+            Token::For => "for".to_string(),
+            Token::While => "while".to_string(),
+            Token::If => "if".to_string(),
+            Token::Else => "else".to_string(),
+            Token::Minus => "-".to_string(),
+            Token::Plus => "+".to_string(),
+            Token::Star => "*".to_string(),
+            Token::Slash => "/".to_string(),
+            Token::Modulo => "%".to_string(),
+            Token::PlusPlus => "++".to_string(),
+            Token::MinusMinus => "--".to_string(),
+            Token::Assign => "=".to_string(),
+            Token::Equals => "==".to_string(),
+            Token::NotEquals => "!=".to_string(),
+            Token::PlusEquals => "+=".to_string(),
+            Token::MinusEquals => "-=".to_string(),
+            Token::StarEquals => "*=".to_string(),
+            Token::SlashEquals => "/=".to_string(),
+            Token::ModuloEquals => "%=".to_string(),
+            Token::LogicalAnd => "&&".to_string(),
+            Token::LogicalOr => "||".to_string(),
+            Token::LParen => "(".to_string(),
+            Token::RParen => ")".to_string(),
+            Token::LBrace => "{".to_string(),
+            Token::RBrace => "}".to_string(),
+            Token::LBracket => "[".to_string(),
+            Token::RBracket => "]".to_string(),
+            Token::Semicolon => ";".to_string(),
+            Token::Ampersand => "&".to_string(),
+            Token::Bang => "!".to_string(),
+            Token::Tilde => "~".to_string(),
+            Token::Comma => ",".to_string(),
+            Token::Colon => ":".to_string(),
+            Token::LessThan => "<".to_string(),
+            Token::LessThanEquals => "<=".to_string(),
+            Token::GreaterThan => ">".to_string(),
+            Token::GreaterThanEquals => ">=".to_string(),
+            Token::EOF => String::new(),
         }
     }
 }
@@ -382,12 +445,15 @@ impl Lexer {
                 }
             },
             Some('#') => {
-                // for now just pretend preprocessor directives are comments and skip them
+                // The preprocessor consumes every directive line before the lexer
+                // sees it, so a `#` reaching here is either a stray one mid-line
+                // or a preprocessor bug. Either way it should be loud.
                 self.advance();
-                while self.current() != Some('\n') && self.current().is_some() {
-                    self.advance();
-                }
-                return self.next_token();
+                return Err(CompileError::new(
+                    "stray `#` in program",
+                    Span::in_file(self.file, start, self.position),
+                )
+                .with_label("directives are handled by the preprocessor"));
             },
             Some('%') => { 
                 self.advance(); 
@@ -692,5 +758,29 @@ mod tests {
         let toks = Lexer::new("int x;").tokenize().unwrap();
         assert_eq!(toks[0].span.file, 0);
         assert_eq!(toks[0].span.start, 0);
+    }
+
+    #[test]
+    fn to_source_round_trips_a_simple_program() {
+        let src = "int main() { return 42; }";
+        let rendered: Vec<String> = Lexer::new(src).tokenize().unwrap()
+            .into_iter()
+            .filter(|t| t.token != Token::EOF)
+            .map(|t| t.token.to_source())
+            .collect();
+        assert_eq!(rendered.join(" "), "int main ( ) { return 42 ; }");
+    }
+
+    #[test]
+    fn to_source_quotes_string_literals() {
+        assert_eq!(Token::StringLiteral("hi".to_string()).to_source(), "\"hi\"");
+    }
+
+    #[test]
+    fn stray_hash_is_now_an_error() {
+        // The preprocessor consumes every directive line, so a `#` reaching the
+        // lexer means a preprocessor bug rather than user error.
+        let err = Lexer::new("int x = 1; # oops").tokenize().unwrap_err();
+        assert!(err.message.contains('#'), "got: {}", err.message);
     }
 }

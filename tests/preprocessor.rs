@@ -8,6 +8,47 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use vbrcc::diagnostic::SourceMap;
+use vbrcc::lexer::Token;
+use vbrcc::preprocessor::Preprocessor;
+
+/// Preprocess `src` and render it back to text, the way `-E` does.
+fn e(src: &str) -> String {
+    let mut map = SourceMap::single("test.c", src);
+    let toks = Preprocessor::new(&mut map).run(0).unwrap();
+    let mut out = String::new();
+    for t in &toks {
+        if t.token == Token::EOF {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&t.token.to_source());
+    }
+    out
+}
+
+#[test]
+fn object_macro_is_expanded_in_e_output() {
+    assert_eq!(e("#define N 10\nint a[N];"), "int a [ 10 ] ;");
+}
+
+#[test]
+fn comments_are_gone_from_e_output() {
+    assert_eq!(e("int /* c */ x; // trailing\n"), "int x ;");
+}
+
+#[test]
+fn string_literals_round_trip_with_quotes() {
+    assert_eq!(e("char *s = \"hi\";"), "char * s = \"hi\" ;");
+}
+
+#[test]
+fn continuation_lines_are_joined() {
+    assert_eq!(e("#define P 1 + \\\n 2\nint x = P;"), "int x = 1 + 2 ;");
+}
+
 fn compile_and_run(src: &str, base: &str) -> Option<i32> {
     let mut c_path = std::env::temp_dir();
     c_path.push(format!("{base}.c"));

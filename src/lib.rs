@@ -58,6 +58,7 @@
 //! | `--gcc` | System `gcc` assembles and links the `.s` file | MinGW-w64 GCC |
 //! | `-o <path>` | Set the output path (default: input with no extension) | |
 //! | `--keep-artifacts` | Keep intermediate `.s` / `.obj` files | |
+//! | `-E` | Preprocess only; print the expanded source and exit | none |
 //!
 //! Use `--lld-link` when the program calls C standard library functions such as
 //! `printf`. The default backend will build such a program and report success, but its
@@ -73,7 +74,10 @@
 //! C source
 //!    │
 //!    ▼
-//!  Lexer          →  tokens, each carrying a span
+//!  Preprocessor   →  resolves directives, expands macros; drives the lexer
+//!    │                (reads other files into a SourceMap)
+//!    ▼
+//!  tokens, each carrying a span tagged with the file it came from
 //!    │
 //!    ▼
 //!  Parser         →  AST (a Program of functions)
@@ -92,6 +96,7 @@
 //!
 //! | Module | Stage |
 //! |---|---|
+//! | [`preprocessor`] | Directives and macro expansion; produces the token stream |
 //! | [`lexer`] | Turns source text into tokens with source spans |
 //! | [`parser`] | Recursive-descent parser building the AST |
 //! | [`ast`] | AST node definitions and the [`ast::Type`] enum |
@@ -116,9 +121,15 @@
 //! Two behaviours are worth calling out explicitly, because they fail quietly rather
 //! than loudly:
 //!
-//! - **Preprocessor directives are skipped, not rejected.** A line beginning with `#`
-//!   is discarded by the lexer, so `#include <stdio.h>` compiles without error and
-//!   without effect. Declarations it would have provided are absent.
+//! - **The preprocessor is partial.** Object-like `#define`, `#undef`, and the
+//!   predefined macros (`__FILE__`, `__LINE__`, `__STDC__`, `__STDC_VERSION__`,
+//!   `_WIN32`, `_WIN64`) work. **`#include` is recognised but does nothing yet** —
+//!   `#include <stdio.h>` still compiles without error and without effect, so
+//!   declarations the header would have provided are absent. Function-like macros,
+//!   the `#if` family, `#` stringizing, and `##` pasting all report an explicit
+//!   "not yet supported" error rather than failing silently.
+//! - **`-E` prints the preprocessed source** and exits, which is the fastest way to
+//!   see what macro expansion actually produced.
 //! - **Type sizes are loose.** Every scalar and every pointer is currently 8 bytes,
 //!   and an array reserves 8 bytes per element. True widths (`char` = 1, `int` = 4)
 //!   are a planned phase. [`ast::Type::size`] and [`ast::Type::align`] are the single

@@ -11,7 +11,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::diagnostic::{CompileError, FileId, Span, SourceMap};
 use crate::lexer::{Lexer, SpannedToken, Token};
-use macros::{MacroTable, MacroDef, MacroKind};
+use macros::{Builtin, MacroTable, MacroDef, MacroKind};
 use normalize::normalize;
 
 /// One open file: its normalized text, how far we have read, and a lexer
@@ -45,6 +45,17 @@ impl FileState {
     fn first_non_blank(&self, start: usize, end: usize) -> Option<usize> {
         (start..end).find(|&i| !self.chars[i].is_whitespace())
     }
+
+    /// 1-based line number containing `offset`, for `__LINE__`.
+    ///
+    /// Normalization preserves newlines, so counting them in the normalized
+    /// buffer gives the same answer as counting them in the original file.
+    fn line_of(&self, offset: usize) -> i64 {
+        1 + self.chars[..offset.min(self.chars.len())]
+            .iter()
+            .filter(|&&c| c == '\n')
+            .count() as i64
+    }
 }
 
 /// An item queued for the parser. The sentinel marks where a macro's expansion
@@ -55,7 +66,6 @@ enum PendingItem {
 }
 
 pub struct Preprocessor<'a> {
-    #[allow(dead_code)]
     map: &'a mut SourceMap,
     macros: MacroTable,
     stack: Vec<FileState>,
@@ -69,7 +79,7 @@ impl<'a> Preprocessor<'a> {
     pub fn new(map: &'a mut SourceMap) -> Preprocessor<'a> {
         Preprocessor {
             map,
-            macros: MacroTable::new(),
+            macros: MacroTable::with_predefined(),
             stack: Vec::new(),
             pending: VecDeque::new(),
             active: HashSet::new(),
@@ -111,6 +121,17 @@ impl<'a> Preprocessor<'a> {
             None => return false,
             Some(def) => match &def.kind {
                 MacroKind::Object { body } => body.clone(),
+                MacroKind::Builtin(b) => {
+                    // Computed at the point of use, not stored.
+                    let st = self.stack.last().expect("stack non-empty");
+                    let token = match b {
+                        Builtin::File => {
+                            Token::StringLiteral(self.map.file(st.file).name.clone())
+                        }
+                        Builtin::Line => Token::IntLiteral(st.line_of(use_site.start)),
+                    };
+                    vec![SpannedToken { token, span: use_site }]
+                }
             },
         };
 
@@ -418,5 +439,48 @@ mod tests {
     fn include_is_still_skipped_silently() {
         // Phase 4 implements this; until then it must behave as it does today.
         assert_eq!(kinds("#include <stdio.h>\nint x;"), kinds("int x;"));
+    }
+
+    // --- Task 5: predefined macros ---
+
+    #[test]
+    fn stdc_macros_are_predefined() {
+        assert_eq!(kinds("int x = __STDC__;"), kinds("int x = 1;"));
+        assert_eq!(kinds("int x = __STDC_VERSION__;"), kinds("int x = 199901;"));
+    }
+
+    #[test]
+    fn windows_target_macros_are_predefined() {
+        assert_eq!(kinds("int x = _WIN32;"), kinds("int x = 1;"));
+        assert_eq!(kinds("int x = _WIN64;"), kinds("int x = 1;"));
+    }
+
+    #[test]
+    fn file_macro_expands_to_the_current_file_name() {
+        let toks = pp("char *f = __FILE__;").unwrap();
+        assert!(toks.iter().any(|t| t.token == Token::StringLiteral("test.c".to_string())),
+                "got {toks:?}");
+    }
+
+    #[test]
+    fn line_macro_expands_to_the_line_it_appears_on() {
+        let toks = pp("int a;\nint b;\nint c = __LINE__;").unwrap();
+        assert!(toks.iter().any(|t| t.token == Token::IntLiteral(3)), "got {toks:?}");
+    }
+
+    #[test]
+    fn predefined_macros_can_be_undefined() {
+        // Asserted directly rather than against a reference string: any string
+        // mentioning __STDC__ would expand it, so a `kinds(..) == kinds(..)`
+        // comparison can never hold once the macro actually works.
+        let toks = kinds("#undef __STDC__\nint x = __STDC__;");
+        assert!(
+            toks.contains(&Token::Ident("__STDC__".to_string())),
+            "after #undef the name must survive verbatim: {toks:?}"
+        );
+        assert!(
+            !toks.contains(&Token::IntLiteral(1)),
+            "the macro should no longer expand: {toks:?}"
+        );
     }
 }

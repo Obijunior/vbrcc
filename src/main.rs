@@ -18,7 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use vbrcc::{parser, codegen, assembler_driver, diagnostic, typeck, preprocessor};
+use vbrcc::{lexer, parser, codegen, assembler_driver, diagnostic, typeck, preprocessor};
 
 #[cfg(windows)]
 fn enable_ansi() {
@@ -56,6 +56,7 @@ fn print_help() {
     println!("    --gcc              Assemble and link using the system gcc");
     println!("    --lld-link         Link using lld-link");
     println!("    --keep-artifacts   Keep intermediate .s / .obj files");
+    println!("    -E                 Preprocess only; print the expanded source and exit");
     println!("    -h, --help         Print this help message");
     println!("    -v, --version      Print version information");
 }
@@ -83,6 +84,7 @@ fn main() {
     let use_gcc = args.iter().any(|a| a == "-gcc" || a == "--gcc");
     let use_lld = args.iter().any(|a| a == "-lld-link" || a == "--lld-link");
     let keep_artifacts = args.iter().any(|a| a == "-keep" || a == "--keep-artifacts");
+    let preprocess_only = args.iter().any(|a| a == "-E");
     let output_path = args
         .iter()
         .position(|a| a == "-o")
@@ -111,6 +113,22 @@ fn main() {
             eprint!("{}", diagnostic::render(&sources, &e, use_color));
             process::exit(1);
         });
+
+    // `-E`: print the expanded source and stop, without parsing.
+    if preprocess_only {
+        let mut text = String::new();
+        for t in &spanned_tokens {
+            if t.token == lexer::Token::EOF {
+                break;
+            }
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&t.token.to_source());
+        }
+        println!("{text}");
+        return;
+    }
 
     if std::env::var("DUMP_TOKENS").is_ok() {
         eprintln!("=== TOKENS ===");

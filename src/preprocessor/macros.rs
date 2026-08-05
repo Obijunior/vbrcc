@@ -3,11 +3,20 @@
 use std::collections::HashMap;
 
 use crate::diagnostic::Span;
-use crate::lexer::SpannedToken;
+use crate::lexer::{SpannedToken, Token};
+
+/// Macros whose value depends on where they are used, so they cannot be stored
+/// as a fixed token body.
+#[derive(Clone, Copy, Debug)]
+pub enum Builtin {
+    File,
+    Line,
+}
 
 #[derive(Clone, Debug)]
 pub enum MacroKind {
     Object { body: Vec<SpannedToken> },
+    Builtin(Builtin),
 }
 
 #[derive(Clone, Debug)]
@@ -43,12 +52,55 @@ impl MacroTable {
     pub fn contains(&self, name: &str) -> bool {
         self.map.contains_key(name)
     }
+
+    /// A table seeded with the predefined macros.
+    ///
+    /// `__DATE__` and `__TIME__` are deliberately absent: producing them without
+    /// a dependency means hand-rolling civil-calendar arithmetic, and nothing
+    /// needs them yet. Add them when something does.
+    ///
+    /// `__STDC_VERSION__` is `199901` rather than the standard's `199901L`
+    /// because integer suffixes are roadmap item 22 and the lexer cannot
+    /// produce one yet.
+    pub fn with_predefined() -> MacroTable {
+        let mut t = MacroTable::new();
+
+        for (name, value) in [
+            ("__STDC__", 1i64),
+            ("__STDC_VERSION__", 199901),
+            // Bundled headers branch on the target; omitting these would make
+            // them lie about the platform we actually emit for.
+            ("_WIN32", 1),
+            ("_WIN64", 1),
+        ] {
+            t.define(
+                name,
+                MacroDef {
+                    kind: MacroKind::Object {
+                        body: vec![SpannedToken {
+                            token: Token::IntLiteral(value),
+                            span: Span::dummy(),
+                        }],
+                    },
+                    name_span: Span::dummy(),
+                },
+            );
+        }
+
+        for (name, builtin) in [("__FILE__", Builtin::File), ("__LINE__", Builtin::Line)] {
+            t.define(
+                name,
+                MacroDef { kind: MacroKind::Builtin(builtin), name_span: Span::dummy() },
+            );
+        }
+
+        t
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Token;
 
     fn obj(tokens: Vec<Token>) -> MacroDef {
         MacroDef {
@@ -72,7 +124,18 @@ mod tests {
                 assert_eq!(body.len(), 1);
                 assert_eq!(body[0].token, Token::IntLiteral(10));
             }
+            other => panic!("expected an object macro, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn with_predefined_seeds_the_standard_set() {
+        let t = MacroTable::with_predefined();
+        for name in ["__STDC__", "__STDC_VERSION__", "_WIN32", "_WIN64", "__FILE__", "__LINE__"] {
+            assert!(t.contains(name), "{name} should be predefined");
+        }
+        assert!(matches!(t.get("__FILE__").unwrap().kind, MacroKind::Builtin(Builtin::File)));
+        assert!(matches!(t.get("__LINE__").unwrap().kind, MacroKind::Builtin(Builtin::Line)));
     }
 
     #[test]
