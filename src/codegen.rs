@@ -15,8 +15,19 @@
 //!   right ends up in `rcx`, then the operation is emitted. This is inefficient, since a
 //!   register allocator would avoid most of it, but it is uniform and composes to
 //!   arbitrary expression depth without running out of registers.
+//! - **Call arguments are staged in frame slots, never materialised into their
+//!   registers early.** Every argument is evaluated into its own `[rbp - n]` slot
+//!   first; only once all of them are evaluated are `rcx`/`rdx`/`r8`/`r9` loaded,
+//!   immediately before the `call`. This is not an optimisation detail — it is
+//!   required for correctness, because the point above means evaluating *any*
+//!   expression clobbers `rcx`, and a nested call clobbers every volatile register
+//!   plus its own 32-byte shadow space. Loading a register and then running more
+//!   code before the `call` silently corrupts that argument. Frame slots sit above
+//!   the shadow space, so neither hazard reaches them.
 //! - **Locals live on the stack** at negative offsets from `rbp`, tracked by the
-//!   `variables` map.
+//!   `variables` map. Argument staging slots come from the same counter and are
+//!   never reused, so a function with many call sites reserves 8 bytes per argument
+//!   per site. Correct but not compact; a high-water-mark scheme would reclaim it.
 //! - **Labels are numbered**, producing names like `loop_0_start` and `if_0_end`, so
 //!   nested control flow cannot collide.
 //!
@@ -323,9 +334,33 @@ impl Codegen {
                     ));
                 }
 
-                for (i, arg) in args.iter().enumerate() {
+                // Evaluate every argument into its own frame slot BEFORE loading
+                // any argument register.
+                //
+                // Materialising straight into rcx/rdx/r8/r9 as we walk the list is
+                // wrong twice over. Binary-op codegen uses rcx as a scratch
+                // register, so an expression argument destroyed argument 0 — that
+                // is why `printf("%d\n", a + b)` segfaulted. And a nested call
+                // clobbers every volatile register plus its own shadow space, so
+                // `add(5, g(1))` silently returned the wrong value.
+                //
+                // Frame slots are addressed off rbp and sit above the 32-byte
+                // shadow space, so neither hazard can reach them. The frame is
+                // sized from `stack_offset` after the body is generated, so these
+                // slots are automatically included.
+                let mut slots = Vec::with_capacity(args.len());
+                for arg in args.iter() {
                     self.gen_expr(arg)?;
-                    self.emit(&format!("  mov {}, rax", arg_regs[i]));
+                    self.stack_offset -= 8;
+                    let slot = self.stack_offset;
+                    self.emit(&format!("  mov [rbp - {}], rax", -slot));
+                    slots.push(slot);
+                }
+
+                // Nothing else runs between here and the call, so loading the
+                // registers is now safe.
+                for (i, slot) in slots.iter().enumerate() {
+                    self.emit(&format!("  mov {}, [rbp - {}]", arg_regs[i], -slot));
                     // Home space for varargs: spill register args into shadow space
                     self.emit(&format!("  mov [rsp + {}], {}", i * 8, arg_regs[i]));
                 }
