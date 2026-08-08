@@ -99,6 +99,35 @@ impl MacroTable {
     }
 }
 
+/// Replace parameter names in `body` with the corresponding argument tokens.
+///
+/// Every token in the result carries `use_site`, so a diagnostic inside an
+/// expansion points at the call rather than at the `#define`.
+///
+/// Arguments are substituted **unexpanded**; the caller rescans the whole result,
+/// which expands them in place.
+pub fn substitute(
+    params: &[String],
+    args: &[Vec<SpannedToken>],
+    body: &[SpannedToken],
+    use_site: Span,
+) -> Vec<SpannedToken> {
+    let mut out = Vec::new();
+    for tok in body {
+        if let Token::Ident(name) = &tok.token {
+            if let Some(i) = params.iter().position(|p| p == name) {
+                out.extend(args[i].iter().map(|t| SpannedToken {
+                    token: t.token.clone(),
+                    span: use_site,
+                }));
+                continue;
+            }
+        }
+        out.push(SpannedToken { token: tok.token.clone(), span: use_site });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +191,33 @@ mod tests {
         let t = MacroTable::new();
         assert!(!t.contains("NOPE"));
         assert!(t.get("NOPE").is_none());
+    }
+
+    #[test]
+    fn substitute_replaces_parameters_positionally() {
+        let params = vec!["a".to_string(), "b".to_string()];
+        let args = vec![
+            vec![SpannedToken { token: Token::IntLiteral(1), span: Span::dummy() }],
+            vec![SpannedToken { token: Token::IntLiteral(2), span: Span::dummy() }],
+        ];
+        let body = vec![
+            SpannedToken { token: Token::Ident("b".to_string()), span: Span::dummy() },
+            SpannedToken { token: Token::Minus, span: Span::dummy() },
+            SpannedToken { token: Token::Ident("a".to_string()), span: Span::dummy() },
+        ];
+        let out = substitute(&params, &args, &body, Span::dummy());
+        let kinds: Vec<Token> = out.into_iter().map(|t| t.token).collect();
+        assert_eq!(kinds, vec![Token::IntLiteral(2), Token::Minus, Token::IntLiteral(1)]);
+    }
+
+    #[test]
+    fn substitute_leaves_non_parameter_identifiers_alone() {
+        let params = vec!["x".to_string()];
+        let args = vec![vec![SpannedToken { token: Token::IntLiteral(9), span: Span::dummy() }]];
+        let body = vec![
+            SpannedToken { token: Token::Ident("other".to_string()), span: Span::dummy() },
+        ];
+        let out = substitute(&params, &args, &body, Span::dummy());
+        assert_eq!(out[0].token, Token::Ident("other".to_string()));
     }
 }

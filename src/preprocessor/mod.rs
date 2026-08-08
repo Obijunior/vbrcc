@@ -97,7 +97,7 @@ impl<'a> Preprocessor<'a> {
         while let Some(tok) = self.next_raw()? {
             if let Token::Ident(name) = &tok.token {
                 let name = name.clone();
-                if self.try_expand(&name, tok.span) {
+                if self.try_expand(&name, tok.span)? {
                     continue;
                 }
             }
@@ -113,42 +113,107 @@ impl<'a> Preprocessor<'a> {
 
     /// Expand `name` if it is a macro that is not already being expanded.
     /// Returns whether anything was pushed.
-    fn try_expand(&mut self, name: &str, use_site: Span) -> bool {
+    fn try_expand(&mut self, name: &str, use_site: Span) -> Result<bool, CompileError> {
         if self.active.contains(name) {
-            return false;
+            return Ok(false);
         }
-        let body = match self.macros.get(name) {
-            None => return false,
-            Some(def) => match &def.kind {
-                MacroKind::Object { body } => body.clone(),
-                MacroKind::Function { .. } => return false, // temp
-                MacroKind::Builtin(b) => {
-                    // Computed at the point of use, not stored.
-                    let st = self.stack.last().expect("stack non-empty");
-                    let token = match b {
-                        Builtin::File => {
-                            Token::StringLiteral(self.map.file(st.file).name.clone())
+        let kind = match self.macros.get(name) {
+            None => return Ok(false),
+            Some(def) => def.kind.clone(),
+        };
+
+        let body = match kind {
+            MacroKind::Object { body } => body,
+            MacroKind::Builtin(b) => {
+                let st = self.stack.last().expect("stack non-empty");
+                let token = match b {
+                    Builtin::File => Token::StringLiteral(self.map.file(st.file).name.clone()),
+                    Builtin::Line => Token::IntLiteral(st.line_of(use_site.start)),
+                };
+                vec![SpannedToken { token, span: use_site }]
+            }
+            MacroKind::Function { params, body } => {
+                match self.next_raw()? {
+                    None => return Ok(false),
+                    Some(tok) => {
+                        if tok.token != Token::LParen {
+                            self.pending.push_front(PendingItem::Tok(tok));
+                            return Ok(false);
                         }
-                        Builtin::Line => Token::IntLiteral(st.line_of(use_site.start)),
-                    };
-                    vec![SpannedToken { token, span: use_site }]
+                    }
                 }
-            },
+
+                let mut args = self.collect_args(name, use_site)?;
+                if args.is_empty() && params.len() == 1 {
+                    args.push(Vec::new());
+                }
+                if args.len() != params.len() {
+                    return Err(CompileError::new(
+                        format!(
+                            "macro `{name}` requires {} argument{}, but {} given",
+                            params.len(),
+                            if params.len() == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                        use_site,
+                    ));
+                }
+                macros::substitute(&params, &args, &body, use_site)
+            }
         };
 
         self.active.insert(name.to_string());
-
-        // Push the body then the sentinel onto the FRONT, preserving order, so
-        // the result is rescanned before any input that follows it.
         self.pending.push_front(PendingItem::EndExpansion(name.to_string()));
         for tok in body.into_iter().rev() {
-            // Expanded tokens report at the call site, not at the #define.
             self.pending.push_front(PendingItem::Tok(SpannedToken {
                 token: tok.token,
                 span: use_site,
             }));
         }
-        true
+        Ok(true)
+    }
+
+    /// Collect a function-like macro's arguments. 
+    fn collect_args(
+        &mut self,
+        name: &str,
+        use_site: Span,
+    ) -> Result<Vec<Vec<SpannedToken>>, CompileError> {
+        let mut args: Vec<Vec<SpannedToken>> = Vec::new();
+        let mut current: Vec<SpannedToken> = Vec::new();
+        let mut depth = 1usize;
+
+        loop {
+            let tok = match self.next_raw()? {
+                Some(t) => t,
+                None => {
+                    return Err(CompileError::new(
+                        format!("unterminated argument list invoking macro `{name}`"),
+                        use_site,
+                    ));
+                }
+            };
+            match tok.token {
+                Token::LParen => {
+                    depth += 1;
+                    current.push(tok);
+                }
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        if !(current.is_empty() && args.is_empty()) {
+                            args.push(current);
+                        }
+                        return Ok(args);
+                    }
+                    current.push(tok);
+                }
+                Token::Comma if depth == 1 => {
+                    args.push(std::mem::take(&mut current));
+                }
+                _ => current.push(tok),
+            }
+        }
     }
 
     /// The next token, before macro expansion. Runs the line loop as needed.
@@ -638,5 +703,83 @@ mod tests {
     fn function_like_macro_body_may_use_a_continuation() {
         let t = table_after("#define ADD(a, b) a + \\\n    b\n");
         assert_eq!(params_of(&t, "ADD"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn function_macro_substitutes_its_arguments() {
+        assert_eq!(kinds("#define ADD(a, b) a + b\nint x = ADD(1, 2);"),
+                   kinds("int x = 1 + 2;"));
+    }
+
+    #[test]
+    fn arguments_may_be_arbitrary_expressions() {
+        assert_eq!(kinds("#define SQ(x) ((x) * (x))\nint y = SQ(3 + 1);"),
+                   kinds("int y = ((3 + 1) * (3 + 1));"));
+    }
+
+    #[test]
+    fn a_parameter_used_twice_is_substituted_twice() {
+        assert_eq!(kinds("#define TWICE(x) x + x\nint y = TWICE(7);"),
+                   kinds("int y = 7 + 7;"));
+    }
+
+    #[test]
+    fn commas_inside_parentheses_do_not_split_arguments() {
+        assert_eq!(kinds("#define ONE(x) x\nint y = ONE(f(1, 2));"),
+                   kinds("int y = f(1, 2);"));
+    }
+
+    #[test]
+    fn arguments_may_span_lines() {
+        // The whole reason the driver is a pull source rather than a line filter.
+        assert_eq!(kinds("#define ADD(a, b) a + b\nint x = ADD(1,\n            2);"),
+                   kinds("int x = 1 + 2;"));
+    }
+
+    #[test]
+    fn a_function_macro_name_without_parens_is_left_alone() {
+        // C is explicit about this: no `(` means no invocation.
+        assert_eq!(kinds("#define F(x) x\nint F;"), kinds("int F;"));
+    }
+
+    #[test]
+    fn the_token_after_a_bare_macro_name_is_not_swallowed() {
+        // Regression guard for the peek-and-pushback: `;` must survive.
+        assert_eq!(kinds("#define F(x) x\nint F; int y;"), kinds("int F; int y;"));
+    }
+
+    #[test]
+    fn zero_parameter_macro_invocation() {
+        assert_eq!(kinds("#define NOW() 42\nint t = NOW();"), kinds("int t = 42;"));
+    }
+
+    #[test]
+    fn one_empty_argument_is_legal() {
+        // `F()` for a one-parameter macro passes a single empty argument.
+        assert_eq!(kinds("#define E(x) [x]\nint a E() ;"), kinds("int a [] ;"));
+    }
+
+    #[test]
+    fn nested_function_macro_expansion() {
+        assert_eq!(kinds("#define SQ(x) ((x) * (x))\n#define ADD(a, b) a + b\nint y = ADD(SQ(2), 3);"),
+                   kinds("int y = ((2) * (2)) + 3;"));
+    }
+
+    #[test]
+    fn too_few_arguments_is_an_error() {
+        let err = pp("#define ADD(a, b) a + b\nint x = ADD(1);").unwrap_err();
+        assert!(err.message.contains("requires 2"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn too_many_arguments_is_an_error() {
+        let err = pp("#define ADD(a, b) a + b\nint x = ADD(1, 2, 3);").unwrap_err();
+        assert!(err.message.contains("requires 2"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn unterminated_argument_list_is_an_error() {
+        let err = pp("#define ADD(a, b) a + b\nint x = ADD(1, 2;").unwrap_err();
+        assert!(err.message.contains("unterminated argument list"), "got: {}", err.message);
     }
 }
