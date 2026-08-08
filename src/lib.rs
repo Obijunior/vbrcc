@@ -121,12 +121,10 @@
 //! Two behaviours are worth calling out explicitly, because they fail quietly rather
 //! than loudly:
 //!
-//! - **The preprocessor is partial.** Object-like `#define`, `#undef`, and the
-//!   predefined macros (`__FILE__`, `__LINE__`, `__STDC__`, `__STDC_VERSION__`,
-//!   `_WIN32`, `_WIN64`) work. **`#include` is recognised but does nothing yet** —
+//! - **The preprocessor is partial.**  **`#include` is recognised but does nothing yet** —
 //!   `#include <stdio.h>` still compiles without error and without effect, so
-//!   declarations the header would have provided are absent. Function-like macros,
-//!   the `#if` family, `#` stringizing, and `##` pasting all report an explicit
+//!   declarations the header would have provided are absent.
+//!   The `#if` family, `#` stringizing, and `##` pasting all report an explicit
 //!   "not yet supported" error rather than failing silently.
 //! - **`-E` prints the preprocessed source** and exits, which is the fastest way to
 //!   see what macro expansion actually produced.

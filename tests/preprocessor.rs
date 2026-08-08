@@ -102,3 +102,46 @@ fn binary_compiles_directive_free_source_unchanged() {
         assert_eq!(code, 42);
     }
 }
+
+#[test]
+fn function_macro_is_expanded_in_e_output() {
+    assert_eq!(e("#define SQ(x) ((x) * (x))\nint y = SQ(3);"),
+               "int y = ( ( 3 ) * ( 3 ) ) ;");
+}
+
+#[test]
+fn function_macro_argument_spanning_lines_in_e_output() {
+    assert_eq!(e("#define ADD(a, b) a + b\nint x = ADD(1,\n 2);"), "int x = 1 + 2 ;");
+}
+
+#[test]
+fn nested_function_macros_in_e_output() {
+    assert_eq!(e("#define SQ(x) ((x) * (x))\n#define ADD(a, b) a + b\nint y = ADD(SQ(2), 3);"),
+               "int y = ( ( 2 ) * ( 2 ) ) + 3 ;");
+}
+
+/// The headline for this phase: a real binary built from function-like macros.
+#[test]
+fn binary_expands_function_macros_end_to_end() {
+    let src = r#"
+#define SQUARE(x)  ((x) * (x))
+#define ADD(a, b)  ((a) + (b))
+int main() { return ADD(SQUARE(5), 17); }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_fn_macro") {
+        assert_eq!(code, 42, "SQUARE(5) + 17 = 25 + 17 = 42");
+    }
+}
+
+/// Guards the classic precedence trap, which is *correct* behaviour for a
+/// textual preprocessor: an unparenthesised body substitutes literally.
+#[test]
+fn binary_unparenthesised_macro_body_substitutes_literally() {
+    let src = r#"
+#define DOUBLE(x)  x * 2
+int main() { return DOUBLE(1 + 20); }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_fn_precedence") {
+        assert_eq!(code, 41, "1 + 20 * 2 = 41, not 42 — textual substitution, as C specifies");
+    }
+}
