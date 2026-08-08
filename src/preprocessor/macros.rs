@@ -16,6 +16,7 @@ pub enum Builtin {
 #[derive(Clone, Debug)]
 pub enum MacroKind {
     Object { body: Vec<SpannedToken> },
+    Function { params: Vec<String>, body: Vec<SpannedToken> },
     Builtin(Builtin),
 }
 

@@ -121,6 +121,7 @@ impl<'a> Preprocessor<'a> {
             None => return false,
             Some(def) => match &def.kind {
                 MacroKind::Object { body } => body.clone(),
+                MacroKind::Function { .. } => return false, // temp
                 MacroKind::Builtin(b) => {
                     // Computed at the point of use, not stored.
                     let st = self.stack.last().expect("stack non-empty");
@@ -230,7 +231,7 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
-    /// `#define NAME body…`  (object-like only in this phase)
+    /// `#define NAME body…` or `#define NAME(a, b) body…`
     fn define(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
         let (file, name, name_start, name_end) = {
             let st = self.stack.last().expect("stack non-empty");
@@ -252,30 +253,36 @@ impl<'a> Preprocessor<'a> {
             ));
         }
 
-        // A `(` touching the name means function-like — Phase 2.
-        let st = self.stack.last().expect("stack non-empty");
-        if name_end < end && st.chars[name_end] == '(' {
-            return Err(CompileError::new(
-                "function-like macros are not yet supported",
-                Span::in_file(file, name_start, name_end),
-            ));
-        }
+        let is_function_like = {
+            let st = self.stack.last().expect("stack non-empty");
+            name_end < end && st.chars[name_end] == '('
+        };
+
+        let (params, body_start) = if is_function_like {
+            self.parse_params(file, name_end + 1, end)?
+        } else {
+            (Vec::new(), name_end)
+        };
 
         let body = {
             let st = self.stack.last_mut().expect("stack non-empty");
-            st.lexer.retarget(name_end, end);
+            st.lexer.retarget(body_start, end);
             st.lexer.tokenize_region()?
+        };
+
+        let kind = if is_function_like {
+            MacroKind::Function { params, body }
+        } else {
+            MacroKind::Object { body }
         };
 
         self.macros.define(
             &name,
-            MacroDef {
-                kind: MacroKind::Object { body },
-                name_span: Span::in_file(file, name_start, name_end),
-            },
+            MacroDef { kind, name_span: Span::in_file(file, name_start, name_end) },
         );
         Ok(())
     }
+
 
     /// `#undef NAME`
     fn undef(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
@@ -291,7 +298,7 @@ impl<'a> Preprocessor<'a> {
             }
             (st.file, st.chars[s..i].iter().collect::<String>(), s, i)
         };
-
+        
         if name.is_empty() {
             return Err(CompileError::new(
                 "macro name missing",
@@ -301,6 +308,82 @@ impl<'a> Preprocessor<'a> {
         self.macros.undef(&name);
         Ok(())
     }
+
+    /// Read a parameter list starting just past the `(`.
+    ///
+    /// Returns the parameter names and the offset just past the `)`, which is
+    /// where the macro body begins.
+    fn parse_params(
+        &self,
+        file: FileId,
+        from: usize,
+        end: usize,
+    ) -> Result<(Vec<String>, usize), CompileError> {
+        let st = self.stack.last().expect("stack non-empty");
+        let mut params: Vec<String> = Vec::new();
+        let mut i = from;
+
+        loop {
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            if i >= end {
+                return Err(CompileError::new(
+                    "missing `)` in macro parameter list",
+                    Span::in_file(file, from.saturating_sub(1), end),
+                ));
+            }
+            if st.chars[i] == ')' {
+                // Only legal here when the list is empty: `#define NOW() 42`.
+                if params.is_empty() {
+                    return Ok((params, i + 1));
+                }
+                return Err(CompileError::new(
+                    "expected a parameter name after `,`",
+                    Span::in_file(file, i, i + 1),
+                ));
+            }
+
+            let start = i;
+            while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+                i += 1;
+            }
+            if i == start {
+                return Err(CompileError::new(
+                    "expected a parameter name",
+                    Span::in_file(file, i, i + 1),
+                ));
+            }
+            let param: String = st.chars[start..i].iter().collect();
+            if params.contains(&param) {
+                return Err(CompileError::new(
+                    format!("duplicate macro parameter `{param}`"),
+                    Span::in_file(file, start, i),
+                ));
+            }
+            params.push(param);
+
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            if i >= end {
+                return Err(CompileError::new(
+                    "missing `)` in macro parameter list",
+                    Span::in_file(file, from.saturating_sub(1), end),
+                ));
+            }
+            match st.chars[i] {
+                ',' => i += 1,
+                ')' => return Ok((params, i + 1)),
+                other => {
+                    return Err(CompileError::new(
+                        format!("expected `,` or `)` in macro parameter list, found `{other}`"),
+                        Span::in_file(file, i, i + 1),
+                    ));
+                }
+            }
+        }
+    }    
 }
 
 #[cfg(test)]
@@ -308,16 +391,34 @@ mod tests {
     use super::*;
     use crate::diagnostic::SourceMap;
     use crate::lexer::{Lexer, Token};
-
-    /// Preprocess a string and return the resulting tokens.
+    
+    // helper functions ---
     pub(crate) fn pp(src: &str) -> Result<Vec<crate::lexer::SpannedToken>, CompileError> {
         let mut map = SourceMap::single("test.c", src);
         Preprocessor::new(&mut map).run(0)
     }
-
+    
     fn kinds(src: &str) -> Vec<Token> {
         pp(src).unwrap().into_iter().map(|t| t.token).collect()
     }
+    
+    fn table_after(src: &str) -> MacroTable {
+        let mut map = SourceMap::single("test.c", src);
+        let mut pp = Preprocessor::new(&mut map);
+        pp.entry = 0;
+        let text = pp.map.file(0).text.clone();
+        pp.stack.push(FileState::new(0, &text));
+        while pp.next_raw().unwrap().is_some() {}
+        pp.macros
+    }
+    
+    fn params_of(t: &MacroTable, name: &str) -> Vec<String> {
+        match &t.get(name).expect("macro should be defined").kind {
+            MacroKind::Function { params, .. } => params.clone(),
+            other => panic!("expected a function-like macro, got {other:?}"),
+        }
+    }
+    // end helper functions ---
 
     #[test]
     fn plain_source_matches_the_bare_lexer() {
@@ -424,12 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn function_like_define_is_rejected_for_now() {
-        let err = pp("#define F(x) x\nint y;").unwrap_err();
-        assert!(err.message.contains("function-like"), "got: {}", err.message);
-    }
-
-    #[test]
     fn define_without_a_name_is_an_error() {
         let err = pp("#define\n").unwrap_err();
         assert!(err.message.contains("macro name"), "got: {}", err.message);
@@ -482,5 +577,66 @@ mod tests {
             !toks.contains(&Token::IntLiteral(1)),
             "the macro should no longer expand: {toks:?}"
         );
+    }
+
+
+    #[test]
+    fn function_like_define_records_its_parameters() {
+        let t = table_after("#define ADD(a, b) a + b\n");
+        assert_eq!(params_of(&t, "ADD"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn function_like_define_with_no_parameters() {
+        let t = table_after("#define NOW() 42\n");
+        assert_eq!(params_of(&t, "NOW"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn function_like_define_body_is_tokenized() {
+        let t = table_after("#define ADD(a, b) a + b\n");
+        match &t.get("ADD").unwrap().kind {
+            MacroKind::Function { body, .. } => {
+                let kinds: Vec<Token> = body.iter().map(|t| t.token.clone()).collect();
+                assert_eq!(kinds, vec![
+                    Token::Ident("a".to_string()),
+                    Token::Plus,
+                    Token::Ident("b".to_string()),
+                ]);
+            }
+            other => panic!("expected function-like, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_space_before_the_paren_means_object_like() {
+        // `#define F (x)` defines F as the token sequence `( x )`, not a macro
+        // taking a parameter. The space is the entire difference.
+        let t = table_after("#define F (x)\n");
+        assert!(matches!(t.get("F").unwrap().kind, MacroKind::Object { .. }));
+    }
+
+    #[test]
+    fn duplicate_parameter_names_are_rejected() {
+        let err = pp("#define BAD(a, a) a\n").unwrap_err();
+        assert!(err.message.contains("duplicate"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn unterminated_parameter_list_is_rejected() {
+        let err = pp("#define BAD(a, b\nint x;").unwrap_err();
+        assert!(err.message.contains("missing `)`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_missing_parameter_name_is_rejected() {
+        let err = pp("#define BAD(a, ) a\n").unwrap_err();
+        assert!(err.message.contains("parameter name"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn function_like_macro_body_may_use_a_continuation() {
+        let t = table_after("#define ADD(a, b) a + \\\n    b\n");
+        assert_eq!(params_of(&t, "ADD"), vec!["a".to_string(), "b".to_string()]);
     }
 }
