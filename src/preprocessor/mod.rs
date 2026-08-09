@@ -6,13 +6,20 @@
 
 pub mod normalize;
 pub mod macros;
+pub mod include;
 
 use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
 
 use crate::diagnostic::{CompileError, FileId, Span, SourceMap};
 use crate::lexer::{Lexer, SpannedToken, Token};
+use include::{IncludeResolver, Resolved};
 use macros::{Builtin, MacroTable, MacroDef, MacroKind};
 use normalize::normalize;
+
+/// How many files may be open at once. Guards against a cyclic `#include`
+/// that no include guard breaks.
+const MAX_INCLUDE_DEPTH: usize = 64;
 
 /// One open `#if`, `#ifdef`, or `#ifndef`.
 struct Cond {
@@ -34,13 +41,26 @@ struct FileState {
     /// Open conditionals, innermost last. A conditional must close in the file
     /// that opens it, so this belongs to the file.
     conds: Vec<Cond>,
+    /// The directory holding this file. `#include "name"` searches here first.
+    /// `None` for a bundled header and for text that came from memory.
+    dir: Option<PathBuf>,
+    /// The canonical path, for `#pragma once`.
+    path: Option<PathBuf>,
 }
 
 impl FileState {
     fn new(file: FileId, text: &str) -> FileState {
         let chars = normalize(text);
         let lexer = Lexer::from_chars(chars.clone(), file);
-        FileState { file, chars, cursor: 0, lexer, conds: Vec::new() }
+        FileState {
+            file,
+            chars,
+            cursor: 0,
+            lexer,
+            conds: Vec::new(),
+            dir: None,
+            path: None,
+        }
     }
 
     fn emitting(&self) -> bool {
@@ -103,10 +123,20 @@ pub struct Preprocessor<'a> {
     sealed: bool,
     out: Vec<SpannedToken>,
     entry: FileId,
+    includes: IncludeResolver,
+    /// Files marked by `#pragma once`, keyed on the canonical path.
+    once: HashSet<PathBuf>,
+    /// One entry per open `#include`, for the diagnostic chain.
+    chain: Vec<Span>,
 }
 
 impl<'a> Preprocessor<'a> {
     pub fn new(map: &'a mut SourceMap) -> Preprocessor<'a> {
+        Preprocessor::with_search_path(map, Vec::new())
+    }
+
+    /// `search` holds the `-I` directories, in command-line order.
+    pub fn with_search_path(map: &'a mut SourceMap, search: Vec<PathBuf>) -> Preprocessor<'a> {
         Preprocessor {
             map,
             macros: MacroTable::with_predefined(),
@@ -116,6 +146,9 @@ impl<'a> Preprocessor<'a> {
             sealed: false,
             out: Vec::new(),
             entry: 0,
+            includes: IncludeResolver::new(search),
+            once: HashSet::new(),
+            chain: Vec::new(),
         }
     }
 
@@ -123,13 +156,24 @@ impl<'a> Preprocessor<'a> {
     pub fn run(mut self, entry: FileId) -> Result<Vec<SpannedToken>, CompileError> {
         self.entry = entry;
         let text = self.map.file(entry).text.clone();
-        self.stack.push(FileState::new(entry, &text));
+        let mut state = FileState::new(entry, &text);
+        let path = PathBuf::from(&self.map.file(entry).name);
+        state.dir = path.parent().map(|d| d.to_path_buf());
+        state.path = path.canonicalize().ok();
+        self.stack.push(state);
 
-        while let Some(tok) = self.next_raw()? {
+        loop {
+            let tok = match self.next_raw() {
+                Err(e) => return Err(self.with_chain(e)),
+                Ok(None) => break,
+                Ok(Some(t)) => t,
+            };
             if let Token::Ident(name) = &tok.token {
                 let name = name.clone();
-                if self.try_expand(&name, tok.span)? {
-                    continue;
+                match self.try_expand(&name, tok.span) {
+                    Err(e) => return Err(self.with_chain(e)),
+                    Ok(true) => continue,
+                    Ok(false) => {}
                 }
             }
             self.out.push(tok);
@@ -140,6 +184,15 @@ impl<'a> Preprocessor<'a> {
             span: Span::in_file(self.entry, 0, 0),
         });
         Ok(self.out)
+    }
+
+    /// Attach the open `#include` chain, innermost first, so a diagnostic
+    /// inside a header names the line that pulled it in.
+    fn with_chain(&self, mut err: CompileError) -> CompileError {
+        for span in self.chain.iter().rev() {
+            err = err.with_note("in file included from", Some(*span));
+        }
+        err
     }
 
     /// Expand `name` if it is a macro that is not already being expanded.
@@ -332,6 +385,7 @@ impl<'a> Preprocessor<'a> {
                     }
                 }
                 self.stack.pop();
+                self.chain.pop();
                 continue;
             }
 
@@ -417,13 +471,11 @@ impl<'a> Preprocessor<'a> {
             "" => Ok(()),
             "define" => self.define(i, end),
             "undef" => self.undef(i, end),
-            // TEMPORARY (Phase 4 implements this): skipping preserves the
-            // behaviour the lexer had before the preprocessor existed, so the
-            // examples that `#include <stdio.h>` keep compiling.
-            "include" => Ok(()),
+            "include" => self.include(i, end, name_start),
             "error" => self.directive_error(file, i, end, true, name_start),
             "warning" => self.directive_error(file, i, end, false, name_start),
-            "pragma" | "line" => Err(CompileError::new(
+            "pragma" => self.pragma(i, end),
+            "line" => Err(CompileError::new(
                 format!("`#{name}` is not yet supported"),
                 Span::in_file(file, name_start, i),
             )),
@@ -550,6 +602,107 @@ impl<'a> Preprocessor<'a> {
             eprintln!("warning: `#warning` directive");
         } else {
             eprintln!("warning: {text}");
+        }
+        Ok(())
+    }
+
+    /// `#include <name>` or `#include "name"`.
+    ///
+    /// The header becomes a new [`FileState`] on the stack. The line loop needs
+    /// no other change: it always reads from the top of the stack, and pops a
+    /// file when the file runs out.
+    fn include(
+        &mut self,
+        from: usize,
+        end: usize,
+        directive_start: usize,
+    ) -> Result<(), CompileError> {
+        let (name, angled, span) = {
+            let st = self.stack.last().expect("stack non-empty");
+            let span = Span::in_file(st.file, directive_start, end);
+            let mut i = from;
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            let (close, angled) = match (i < end).then(|| st.chars[i]) {
+                Some('<') => ('>', true),
+                Some('"') => ('"', false),
+                _ => {
+                    return Err(CompileError::new(
+                        "expected `<name>` or `\"name\"` after `#include`",
+                        span,
+                    ));
+                }
+            };
+            i += 1;
+            let start = i;
+            while i < end && st.chars[i] != close {
+                i += 1;
+            }
+            if i >= end {
+                return Err(CompileError::new(
+                    format!("missing closing `{close}` in `#include`"),
+                    span,
+                ));
+            }
+            (st.chars[start..i].iter().collect::<String>(), angled, span)
+        };
+
+        if self.stack.len() >= MAX_INCLUDE_DEPTH {
+            return Err(CompileError::new("`#include` nested too deeply", span)
+                .with_label("a header probably includes itself"));
+        }
+
+        let from_dir = self.stack.last().and_then(|st| st.dir.clone());
+        let (display, text, path, dir) = match self.includes.resolve(&name, angled, from_dir.as_deref()) {
+            None => {
+                return Err(CompileError::new(format!("'{name}' file not found"), span)
+                    .with_note(
+                        format!("searched: {}", self.includes.searched_description()),
+                        None,
+                    ));
+            }
+            Some(Resolved::Bundled(text)) => (name.clone(), text.to_string(), None, None),
+            Some(Resolved::File(p)) => {
+                let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
+                if self.once.contains(&canonical) {
+                    return Ok(());
+                }
+                let text = std::fs::read_to_string(&p).map_err(|e| {
+                    CompileError::new(format!("cannot read '{}': {e}", p.display()), span)
+                })?;
+                let dir = p.parent().map(|d| d.to_path_buf());
+                (p.display().to_string(), text, Some(canonical), dir)
+            }
+        };
+
+        let id = self.map.add(display, text.clone());
+        let mut state = FileState::new(id, &text);
+        state.dir = dir;
+        state.path = path;
+        self.chain.push(span);
+        self.stack.push(state);
+        Ok(())
+    }
+
+    /// Only `#pragma once` is understood. Every other pragma is ignored, which
+    /// is what the standard permits for an unrecognised pragma.
+    fn pragma(&mut self, from: usize, end: usize) -> Result<(), CompileError> {
+        let once = {
+            let st = self.stack.last().expect("stack non-empty");
+            let mut i = from;
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            let s = i;
+            while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+                i += 1;
+            }
+            let word: String = st.chars[s..i].iter().collect();
+            if word == "once" { st.path.clone() } else { None }
+        };
+        if let Some(path) = once {
+            self.once.insert(path);
         }
         Ok(())
     }
@@ -992,10 +1145,124 @@ mod tests {
         assert_eq!(kinds("#warning just so you know\nint a;"), kinds("int a;"));
     }
 
+    // --- Task 3: #include ---
+
     #[test]
-    fn include_is_still_skipped_silently() {
-        // Phase 4 implements this; until then it must behave as it does today.
-        assert_eq!(kinds("#include <stdio.h>\nint x;"), kinds("int x;"));
+    fn include_brings_in_a_bundled_header() {
+        assert_eq!(kinds("#include <limits.h>\nint x = INT_MAX;"),
+                   kinds("int x = 2147483647;"));
+    }
+
+    #[test]
+    fn text_after_an_include_still_reaches_the_output() {
+        // The header must pop and hand control back to the includer.
+        assert_eq!(kinds("#include <limits.h>\nint after;"), kinds("int after;"));
+    }
+
+    #[test]
+    fn a_missing_header_is_an_error() {
+        let err = pp("#include <nope.h>\n").unwrap_err();
+        assert!(err.message.contains("file not found"), "got: {}", err.message);
+        assert!(err.notes.iter().any(|n| n.message.contains("bundled")),
+                "the error should list what was searched: {:?}", err.notes);
+    }
+
+    #[test]
+    fn an_include_guard_stops_a_second_inclusion() {
+        // limits.h guards itself, so the second read defines nothing new and
+        // emits nothing.
+        assert_eq!(kinds("#include <limits.h>\n#include <limits.h>\nint x = INT_MAX;"),
+                   kinds("int x = 2147483647;"));
+    }
+
+    #[test]
+    fn a_malformed_include_is_an_error() {
+        let err = pp("#include stdio.h\n").unwrap_err();
+        assert!(err.message.contains("expected"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_unclosed_include_bracket_is_an_error() {
+        let err = pp("#include <stdio.h\n").unwrap_err();
+        assert!(err.message.contains("missing closing"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_include_inside_a_dead_branch_is_not_read() {
+        assert_eq!(kinds("#ifdef NOPE\n#include <nope.h>\n#endif\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn an_error_inside_a_header_names_the_including_line() {
+        // stddef.h defines NULL as `((void *)0)`; nothing there fails. Use a
+        // header that does: limits.h is fine, so provoke the failure with a
+        // deliberately bad quoted include instead.
+        let dir = std::env::temp_dir().join("vbrcc_pp_chain");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bad.h"), "int x = @;\n").unwrap();
+
+        let mut map = SourceMap::single("test.c", "#include \"bad.h\"\nint a;");
+        let err = Preprocessor::with_search_path(&mut map, vec![dir])
+            .run(0)
+            .unwrap_err();
+        assert!(err.message.contains('@'), "got: {}", err.message);
+        assert!(err.notes.iter().any(|n| n.message.contains("included from")),
+                "the chain is missing: {:?}", err.notes);
+    }
+
+    #[test]
+    fn a_quoted_include_finds_a_file_beside_its_includer() {
+        let dir = std::env::temp_dir().join("vbrcc_pp_relative");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("local.h"), "#define LOCAL 7\n").unwrap();
+        let main = dir.join("main.c");
+        std::fs::write(&main, "#include \"local.h\"\nint x = LOCAL;\n").unwrap();
+
+        let mut map = SourceMap::single(main.to_str().unwrap(),
+                                        "#include \"local.h\"\nint x = LOCAL;\n");
+        let toks: Vec<Token> = Preprocessor::new(&mut map).run(0).unwrap()
+            .into_iter().map(|t| t.token).collect();
+        assert!(toks.contains(&Token::IntLiteral(7)), "got {toks:?}");
+    }
+
+    #[test]
+    fn pragma_once_stops_a_second_inclusion() {
+        let dir = std::env::temp_dir().join("vbrcc_pp_once");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("once.h"), "#pragma once\nint marker;\n").unwrap();
+
+        let mut map = SourceMap::single("test.c", "#include <once.h>\n#include <once.h>\n");
+        let toks: Vec<Token> = Preprocessor::with_search_path(&mut map, vec![dir])
+            .run(0).unwrap().into_iter().map(|t| t.token).collect();
+        assert_eq!(toks.iter().filter(|t| **t == Token::Ident("marker".to_string())).count(), 1,
+                   "got {toks:?}");
+    }
+
+    #[test]
+    fn an_unknown_pragma_is_ignored() {
+        assert_eq!(kinds("#pragma pack(1)\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn a_cyclic_include_hits_the_depth_cap() {
+        let dir = std::env::temp_dir().join("vbrcc_pp_cycle");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("loop.h"), "#include <loop.h>\n").unwrap();
+
+        let mut map = SourceMap::single("test.c", "#include <loop.h>\n");
+        let err = Preprocessor::with_search_path(&mut map, vec![dir]).run(0).unwrap_err();
+        assert!(err.message.contains("too deeply"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_conditional_must_close_in_the_file_that_opens_it() {
+        let dir = std::env::temp_dir().join("vbrcc_pp_unbalanced");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("open.h"), "#ifdef NOPE\n").unwrap();
+
+        let mut map = SourceMap::single("test.c", "#include <open.h>\n#endif\n");
+        let err = Preprocessor::with_search_path(&mut map, vec![dir]).run(0).unwrap_err();
+        assert!(err.message.contains("unterminated"), "got: {}", err.message);
     }
 
     // --- Task 5: predefined macros ---

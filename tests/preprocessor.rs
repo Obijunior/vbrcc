@@ -186,6 +186,52 @@ int main() { return VALUE; }
     }
 }
 
+#[test]
+fn bundled_header_reaches_e_output() {
+    assert_eq!(e("#include <limits.h>\nint x = SHRT_MAX;"), "int x = 32767 ;");
+}
+
+/// `#include` must resolve through the compiled binary, not only through the
+/// library. This is the wiring test for `-I` and for the bundled set.
+#[test]
+fn binary_includes_a_bundled_header() {
+    let src = "#include <limits.h>\nint main() { return CHAR_BIT * 5 + 2; }\n";
+    if let Some(code) = compile_and_run(src, "pp_include_limits") {
+        assert_eq!(code, 42);
+    }
+}
+
+#[test]
+fn binary_accepts_a_search_directory() {
+    let dir = std::env::temp_dir().join("vbrcc_e2e_inc");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("answer.h"), "#define ANSWER 42\n").unwrap();
+
+    let mut c_path = std::env::temp_dir();
+    c_path.push("pp_dash_i.c");
+    let mut out_base = std::env::temp_dir();
+    out_base.push("pp_dash_i");
+    std::fs::write(&c_path, "#include <answer.h>\nint main() { return ANSWER; }\n").unwrap();
+
+    let status = Command::new("cargo")
+        .args([
+            "run", "--quiet", "--",
+            c_path.to_str().unwrap(),
+            "-I", dir.to_str().unwrap(),
+            "-o", out_base.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "compile failed");
+
+    let mut exe = out_base.clone();
+    exe.set_extension("exe");
+    let exe: PathBuf = if exe.exists() { exe } else { out_base };
+    if let Some(code) = run_exit_code(&exe) {
+        assert_eq!(code, 42);
+    }
+}
+
 /// This returned 127 before argument pre-expansion.
 #[test]
 fn binary_expands_a_macro_nested_in_its_own_argument() {

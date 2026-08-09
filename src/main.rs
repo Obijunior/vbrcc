@@ -57,8 +57,29 @@ fn print_help() {
     println!("    --lld-link         Link using lld-link");
     println!("    --keep-artifacts   Keep intermediate .s / .obj files");
     println!("    -E                 Preprocess only; print the expanded source and exit");
+    println!("    -I <dir>           Add a directory to the #include search path");
     println!("    -h, --help         Print this help message");
     println!("    -v, --version      Print version information");
+}
+
+/// Both `-I dir` and `-Idir` are accepted, which is what every C compiler does.
+fn collect_include_dirs(args: &[String]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "-I" {
+            if let Some(dir) = args.get(i + 1) {
+                dirs.push(PathBuf::from(dir));
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = args[i].strip_prefix("-I") {
+            dirs.push(PathBuf::from(rest));
+        }
+        i += 1;
+    }
+    dirs
 }
 
 fn main() {
@@ -85,6 +106,7 @@ fn main() {
     let use_lld = args.iter().any(|a| a == "-lld-link" || a == "--lld-link");
     let keep_artifacts = args.iter().any(|a| a == "-keep" || a == "--keep-artifacts");
     let preprocess_only = args.iter().any(|a| a == "-E");
+    let include_dirs = collect_include_dirs(&args);
     let output_path = args
         .iter()
         .position(|a| a == "-o")
@@ -107,7 +129,7 @@ fn main() {
     enable_ansi();
 
     // --- Stage 0: Preprocess ---
-    let spanned_tokens = preprocessor::Preprocessor::new(&mut sources)
+    let spanned_tokens = preprocessor::Preprocessor::with_search_path(&mut sources, include_dirs)
         .run(main_file)
         .unwrap_or_else(|e| {
             eprint!("{}", diagnostic::render(&sources, &e, use_color));
