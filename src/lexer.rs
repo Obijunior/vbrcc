@@ -507,7 +507,11 @@ impl Lexer {
                     self.advance();
                     Token::LogicalOr
                 } else {
-                    panic!("Unexpected character: '|' (did you mean '||'?)");
+                    return Err(CompileError::new(
+                        "unexpected character `|`",
+                        Span::in_file(self.file, start, self.position),
+                    )
+                    .with_label("bitwise `|` is not supported yet; did you mean `||`?"));
                 }
             },
             None => Token::EOF,
@@ -774,6 +778,14 @@ mod tests {
     #[test]
     fn to_source_quotes_string_literals() {
         assert_eq!(Token::StringLiteral("hi".to_string()).to_source(), "\"hi\"");
+    }
+
+    #[test]
+    fn a_single_pipe_is_an_error_not_a_panic() {
+        let src = "int main() { return 1 | 2; }";
+        let err = Lexer::new(src).tokenize().unwrap_err();
+        assert!(err.message.contains('|'), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find('|').unwrap());
     }
 
     #[test]

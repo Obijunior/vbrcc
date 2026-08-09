@@ -145,3 +145,55 @@ int main() { return DOUBLE(1 + 20); }
         assert_eq!(code, 41, "1 + 20 * 2 = 41, not 42 — textual substitution, as C specifies");
     }
 }
+
+#[test]
+fn dead_branch_is_removed_from_e_output() {
+    assert_eq!(e("#ifdef NOPE\nint dead;\n#endif\nint live;"), "int live ;");
+}
+
+#[test]
+fn else_branch_selected_in_e_output() {
+    assert_eq!(e("#ifdef NOPE\nint dead;\n#else\nint live;\n#endif"), "int live ;");
+}
+
+/// A skipped block may hold text that does not lex.
+#[test]
+fn binary_compiles_with_garbage_in_a_dead_branch() {
+    let src = r#"
+#ifdef ENABLE_EXPERIMENTAL
+    this block is ' not | valid C @@ and must never be lexed
+#endif
+int main() { return 42; }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_dead_garbage") {
+        assert_eq!(code, 42);
+    }
+}
+
+#[test]
+fn binary_selects_a_branch_by_ifdef() {
+    let src = r#"
+#define USE_BIG
+#ifdef USE_BIG
+#define VALUE 42
+#else
+#define VALUE 1
+#endif
+int main() { return VALUE; }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_ifdef_branch") {
+        assert_eq!(code, 42);
+    }
+}
+
+/// This returned 127 before argument pre-expansion.
+#[test]
+fn binary_expands_a_macro_nested_in_its_own_argument() {
+    let src = r#"
+#define ADD(a, b)  ((a) + (b))
+int main() { return ADD(ADD(1, 2), 39); }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_nested_same_macro") {
+        assert_eq!(code, 42);
+    }
+}

@@ -14,6 +14,16 @@ use crate::lexer::{Lexer, SpannedToken, Token};
 use macros::{Builtin, MacroTable, MacroDef, MacroKind};
 use normalize::normalize;
 
+/// One open `#if`, `#ifdef`, or `#ifndef`.
+struct Cond {
+    active: bool,
+    /// True if a branch of this conditional was taken. `#else` reads this.
+    taken: bool,
+    seen_else: bool,
+    /// The opening directive. The "unterminated" error points here.
+    span: Span,
+}
+
 /// One open file: its normalized text, how far we have read, and a lexer
 /// positioned over it.
 struct FileState {
@@ -21,13 +31,29 @@ struct FileState {
     chars: Vec<char>,
     cursor: usize,
     lexer: Lexer,
+    /// Open conditionals, innermost last. A conditional must close in the file
+    /// that opens it, so this belongs to the file.
+    conds: Vec<Cond>,
 }
 
 impl FileState {
     fn new(file: FileId, text: &str) -> FileState {
         let chars = normalize(text);
         let lexer = Lexer::from_chars(chars.clone(), file);
-        FileState { file, chars, cursor: 0, lexer }
+        FileState { file, chars, cursor: 0, lexer, conds: Vec::new() }
+    }
+
+    fn emitting(&self) -> bool {
+        self.conds.iter().all(|c| c.active)
+    }
+
+    /// True if the region that contains the innermost conditional is live.
+    ///
+    /// This separates "the branch was not taken" from "the whole region is
+    /// dead". An unsupported directive gets a diagnostic in the first case
+    /// only.
+    fn outer_live(&self) -> bool {
+        self.conds.iter().rev().skip(1).all(|c| c.active)
     }
 
     /// Consume one logical line, returning `[start, end)` without the newline.
@@ -71,6 +97,10 @@ pub struct Preprocessor<'a> {
     stack: Vec<FileState>,
     pending: VecDeque<PendingItem>,
     active: HashSet<String>,
+    /// While true, `next_raw` drains `pending` only. Macro-argument expansion
+    /// sets this. Without it, an expansion can read past the end of the
+    /// argument and consume the source that follows the macro call.
+    sealed: bool,
     out: Vec<SpannedToken>,
     entry: FileId,
 }
@@ -83,6 +113,7 @@ impl<'a> Preprocessor<'a> {
             stack: Vec::new(),
             pending: VecDeque::new(),
             active: HashSet::new(),
+            sealed: false,
             out: Vec::new(),
             entry: 0,
         }
@@ -143,7 +174,14 @@ impl<'a> Preprocessor<'a> {
                     }
                 }
 
-                let mut args = self.collect_args(name, use_site)?;
+                let raw_args = self.collect_args(name, use_site)?;
+                // C11 6.10.3.1 expands each argument before substitution, in a
+                // context where the enclosing macro is not yet painted. `name`
+                // enters `active` below, so this is that context.
+                let mut args = Vec::with_capacity(raw_args.len());
+                for arg in raw_args {
+                    args.push(self.expand_list(arg)?);
+                }
                 if args.is_empty() && params.len() == 1 {
                     args.push(Vec::new());
                 }
@@ -173,7 +211,46 @@ impl<'a> Preprocessor<'a> {
         Ok(true)
     }
 
-    /// Collect a function-like macro's arguments. 
+    /// Expand a closed token list.
+    ///
+    /// `pending` changes to a private queue and `sealed` becomes true, so the
+    /// expansion cannot read past the end of the list.
+    fn expand_list(
+        &mut self,
+        tokens: Vec<SpannedToken>,
+    ) -> Result<Vec<SpannedToken>, CompileError> {
+        let saved_pending = std::mem::replace(
+            &mut self.pending,
+            tokens.into_iter().map(PendingItem::Tok).collect(),
+        );
+        let was_sealed = self.sealed;
+        self.sealed = true;
+
+        let mut out = Vec::new();
+        let result = loop {
+            match self.next_raw() {
+                Err(e) => break Err(e),
+                Ok(None) => break Ok(()),
+                Ok(Some(tok)) => {
+                    if let Token::Ident(name) = &tok.token {
+                        let name = name.clone();
+                        match self.try_expand(&name, tok.span) {
+                            Err(e) => break Err(e),
+                            Ok(true) => continue,
+                            Ok(false) => {}
+                        }
+                    }
+                    out.push(tok);
+                }
+            }
+        };
+
+        self.sealed = was_sealed;
+        self.pending = saved_pending;
+        result.map(|()| out)
+    }
+
+    /// Collect a function-like macro's arguments.
     fn collect_args(
         &mut self,
         name: &str,
@@ -228,6 +305,10 @@ impl<'a> Preprocessor<'a> {
                 }
             }
 
+            if self.sealed {
+                return Ok(None);
+            }
+
             let (start, end, at_eof) = match self.stack.last_mut() {
                 None => return Ok(None),
                 Some(st) => {
@@ -241,6 +322,15 @@ impl<'a> Preprocessor<'a> {
             };
 
             if at_eof {
+                if let Some(st) = self.stack.last() {
+                    if let Some(c) = st.conds.last() {
+                        return Err(CompileError::new(
+                            "unterminated conditional directive",
+                            c.span,
+                        )
+                        .with_label("this conditional is never closed"));
+                    }
+                }
                 self.stack.pop();
                 continue;
             }
@@ -252,6 +342,11 @@ impl<'a> Preprocessor<'a> {
                     self.directive(i + 1, end)?;
                 }
                 Some(_) => {
+                    // A dead branch can hold text that does not lex. Skip it
+                    // before the lexer sees it.
+                    if !self.emitting() {
+                        continue;
+                    }
                     let st = self.stack.last_mut().expect("stack non-empty");
                     st.lexer.retarget(start, end);
                     let toks = st.lexer.tokenize_region()?;
@@ -275,6 +370,48 @@ impl<'a> Preprocessor<'a> {
         }
         let name: String = st.chars[name_start..i].iter().collect();
 
+        // Conditional directives always run, even in a dead branch, so that
+        // nesting and `#endif` pairing stay correct.
+        match name.as_str() {
+            "ifdef" => return self.if_defined(i, end, true, name_start),
+            "ifndef" => return self.if_defined(i, end, false, name_start),
+            "else" => return self.directive_else(file, name_start, i),
+            "endif" => return self.directive_endif(file, name_start, i),
+            "if" => {
+                let live = self.stack.last().expect("stack non-empty").emitting();
+                if live {
+                    return Err(CompileError::new(
+                        "`#if` is not yet supported",
+                        Span::in_file(file, name_start, i),
+                    ));
+                }
+                let st = self.stack.last_mut().expect("stack non-empty");
+                st.conds.push(Cond {
+                    active: false,
+                    taken: true,
+                    seen_else: false,
+                    span: Span::in_file(file, name_start, i),
+                });
+                return Ok(());
+            }
+            "elif" => {
+                let outer_live = self.stack.last().expect("stack non-empty").outer_live();
+                if outer_live {
+                    return Err(CompileError::new(
+                        "`#elif` is not yet supported",
+                        Span::in_file(file, name_start, i),
+                    ));
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Dead code gets no diagnostics. A skipped block may hold anything.
+        if !self.emitting() {
+            return Ok(());
+        }
+
         match name.as_str() {
             // A `#` on a line by itself is the null directive: legal, ignored.
             "" => Ok(()),
@@ -284,8 +421,9 @@ impl<'a> Preprocessor<'a> {
             // behaviour the lexer had before the preprocessor existed, so the
             // examples that `#include <stdio.h>` keep compiling.
             "include" => Ok(()),
-            "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif" | "error"
-            | "warning" | "pragma" | "line" => Err(CompileError::new(
+            "error" => self.directive_error(file, i, end, true, name_start),
+            "warning" => self.directive_error(file, i, end, false, name_start),
+            "pragma" | "line" => Err(CompileError::new(
                 format!("`#{name}` is not yet supported"),
                 Span::in_file(file, name_start, i),
             )),
@@ -294,6 +432,126 @@ impl<'a> Preprocessor<'a> {
                 Span::in_file(file, name_start, i),
             )),
         }
+    }
+
+    fn emitting(&self) -> bool {
+        self.stack.last().is_none_or(|st| st.emitting())
+    }
+
+    /// `#ifdef NAME` when `want_defined`, otherwise `#ifndef NAME`.
+    fn if_defined(
+        &mut self,
+        from: usize,
+        end: usize,
+        want_defined: bool,
+        directive_start: usize,
+    ) -> Result<(), CompileError> {
+        let (file, name, name_start, name_end) = {
+            let st = self.stack.last().expect("stack non-empty");
+            let mut i = from;
+            while i < end && st.chars[i].is_whitespace() {
+                i += 1;
+            }
+            let s = i;
+            while i < end && (st.chars[i].is_alphanumeric() || st.chars[i] == '_') {
+                i += 1;
+            }
+            (st.file, st.chars[s..i].iter().collect::<String>(), s, i)
+        };
+
+        if name.is_empty() && self.emitting() {
+            return Err(CompileError::new(
+                "macro name missing after the conditional directive",
+                Span::in_file(file, name_start, name_end.max(name_start + 1)),
+            ));
+        }
+
+        let active = self.macros.contains(&name) == want_defined;
+        let st = self.stack.last_mut().expect("stack non-empty");
+        st.conds.push(Cond {
+            active,
+            taken: active,
+            seen_else: false,
+            span: Span::in_file(file, directive_start, end),
+        });
+        Ok(())
+    }
+
+    fn directive_else(
+        &mut self,
+        file: FileId,
+        name_start: usize,
+        name_end: usize,
+    ) -> Result<(), CompileError> {
+        let st = self.stack.last_mut().expect("stack non-empty");
+        match st.conds.last_mut() {
+            None => Err(CompileError::new(
+                "`#else` without `#if`",
+                Span::in_file(file, name_start, name_end),
+            )),
+            Some(c) => {
+                if c.seen_else {
+                    return Err(CompileError::new(
+                        "`#else` after `#else`",
+                        Span::in_file(file, name_start, name_end),
+                    ));
+                }
+                c.seen_else = true;
+                c.active = !c.taken;
+                c.taken = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn directive_endif(
+        &mut self,
+        file: FileId,
+        name_start: usize,
+        name_end: usize,
+    ) -> Result<(), CompileError> {
+        let st = self.stack.last_mut().expect("stack non-empty");
+        if st.conds.pop().is_none() {
+            return Err(CompileError::new(
+                "`#endif` without `#if`",
+                Span::in_file(file, name_start, name_end),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `#error message` stops the build. `#warning message` does not.
+    ///
+    /// The message is raw text, not tokens. It often contains prose that would
+    /// not lex.
+    fn directive_error(
+        &mut self,
+        file: FileId,
+        from: usize,
+        end: usize,
+        fatal: bool,
+        name_start: usize,
+    ) -> Result<(), CompileError> {
+        let text = {
+            let st = self.stack.last().expect("stack non-empty");
+            st.chars[from.min(end)..end].iter().collect::<String>().trim().to_string()
+        };
+
+        if fatal {
+            let message = if text.is_empty() {
+                "`#error` directive".to_string()
+            } else {
+                format!("`#error`: {text}")
+            };
+            return Err(CompileError::new(message, Span::in_file(file, name_start, end)));
+        }
+
+        if text.is_empty() {
+            eprintln!("warning: `#warning` directive");
+        } else {
+            eprintln!("warning: {text}");
+        }
+        Ok(())
     }
 
     /// `#define NAME body…` or `#define NAME(a, b) body…`
@@ -593,6 +851,145 @@ mod tests {
     fn define_without_a_name_is_an_error() {
         let err = pp("#define\n").unwrap_err();
         assert!(err.message.contains("macro name"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_macro_nested_in_its_own_argument_is_expanded() {
+        assert_eq!(kinds("#define ADD(a, b) ((a) + (b))\nint x = ADD(ADD(1, 2), 39);"),
+                   kinds("int x = ((((1) + (2))) + (39));"));
+    }
+
+    #[test]
+    fn a_simple_self_nested_macro_is_expanded() {
+        assert_eq!(kinds("#define F(x) x\nint a = F(F(1));"), kinds("int a = 1;"));
+    }
+
+    #[test]
+    fn three_deep_self_nesting() {
+        assert_eq!(kinds("#define F(x) x\nint a = F(F(F(2)));"), kinds("int a = 2;"));
+    }
+
+    #[test]
+    fn object_macro_in_an_argument_is_still_expanded() {
+        assert_eq!(kinds("#define N 5\n#define ID(x) x\nint a = ID(N);"), kinds("int a = 5;"));
+    }
+
+    #[test]
+    fn a_directly_recursive_macro_still_terminates() {
+        assert_eq!(kinds("#define F(x) F(x)\nint a = F(1);"), kinds("int a = F(1);"));
+    }
+
+    #[test]
+    fn a_bare_function_macro_name_ending_an_argument_is_left_alone() {
+        // The peek for `(` must stop at the end of the argument.
+        assert_eq!(kinds("#define G(x) x\n#define ID(y) y\nint a = ID(G) ;"),
+                   kinds("int a = G ;"));
+    }
+
+    #[test]
+    fn ifdef_on_an_undefined_name_skips_the_body() {
+        assert_eq!(kinds("#ifdef NOPE\nint dead;\n#endif\nint live;"), kinds("int live;"));
+    }
+
+    #[test]
+    fn ifdef_on_a_defined_name_keeps_the_body() {
+        assert_eq!(kinds("#define YES 1\n#ifdef YES\nint a;\n#endif"), kinds("int a;"));
+    }
+
+    #[test]
+    fn ifndef_is_the_inverse_of_ifdef() {
+        assert_eq!(kinds("#ifndef NOPE\nint a;\n#endif"), kinds("int a;"));
+        assert_eq!(kinds("#define YES 1\n#ifndef YES\nint dead;\n#endif\nint b;"), kinds("int b;"));
+    }
+
+    #[test]
+    fn else_takes_the_other_branch() {
+        assert_eq!(kinds("#ifdef NOPE\nint dead;\n#else\nint live;\n#endif"), kinds("int live;"));
+        assert_eq!(kinds("#define Y 1\n#ifdef Y\nint live;\n#else\nint dead;\n#endif"),
+                   kinds("int live;"));
+    }
+
+    #[test]
+    fn a_dead_branch_may_contain_anything_at_all() {
+        let src = "#ifdef NOPE\nthis is ' not | valid @@ C at all\n#endif\nint ok;";
+        assert_eq!(kinds(src), kinds("int ok;"));
+    }
+
+    #[test]
+    fn a_define_inside_a_dead_branch_does_not_take_effect() {
+        assert_eq!(kinds("#ifdef NOPE\n#define X 9\n#endif\nint a = X;"), kinds("int a = X;"));
+    }
+
+    #[test]
+    fn an_unknown_directive_inside_a_dead_branch_is_not_diagnosed() {
+        assert_eq!(kinds("#ifdef NOPE\n#nonsense whatever\n#endif\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn an_unsupported_if_inside_a_dead_branch_is_not_diagnosed() {
+        assert_eq!(kinds("#ifdef NOPE\n#if 1\nint dead;\n#endif\n#endif\nint a;"),
+                   kinds("int a;"));
+    }
+
+    #[test]
+    fn nested_conditionals_pair_correctly() {
+        let src = "#define Y 1\n#ifdef Y\nint outer;\n#ifdef NOPE\nint dead;\n#endif\nint after;\n#endif";
+        assert_eq!(kinds(src), kinds("int outer; int after;"));
+    }
+
+    #[test]
+    fn a_live_conditional_nested_in_a_dead_one_stays_dead() {
+        let src = "#define Y 1\n#ifdef NOPE\n#ifdef Y\nint dead;\n#endif\n#endif\nint a;";
+        assert_eq!(kinds(src), kinds("int a;"));
+    }
+
+    #[test]
+    fn include_guard_pattern_works() {
+        let src = "#ifndef GUARD_H\n#define GUARD_H\nint once;\n#endif\n\
+                   #ifndef GUARD_H\nint twice;\n#endif";
+        assert_eq!(kinds(src), kinds("int once;"));
+    }
+
+    #[test]
+    fn endif_without_an_opener_is_an_error() {
+        let err = pp("int a;\n#endif\n").unwrap_err();
+        assert!(err.message.contains("without"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn else_without_an_opener_is_an_error() {
+        let err = pp("int a;\n#else\n").unwrap_err();
+        assert!(err.message.contains("without"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_unterminated_conditional_is_reported_at_its_opening_directive() {
+        let src = "#ifdef NOPE\nint dead;\n";
+        let err = pp(src).unwrap_err();
+        assert!(err.message.contains("unterminated"), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find("ifdef").unwrap());
+    }
+
+    #[test]
+    fn error_directive_reports_its_message() {
+        let err = pp("#error something went wrong\nint a;").unwrap_err();
+        assert!(err.message.contains("something went wrong"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn error_directive_with_no_message() {
+        let err = pp("#error\n").unwrap_err();
+        assert!(err.message.contains("#error"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn error_inside_a_dead_branch_does_not_fire() {
+        assert_eq!(kinds("#ifdef NOPE\n#error nope\n#endif\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn warning_directive_does_not_stop_compilation() {
+        assert_eq!(kinds("#warning just so you know\nint a;"), kinds("int a;"));
     }
 
     #[test]
