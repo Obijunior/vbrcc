@@ -114,14 +114,14 @@ pub fn substitute(
 ) -> Vec<SpannedToken> {
     let mut out = Vec::new();
     for tok in body {
-        if let Token::Ident(name) = &tok.token {
-            if let Some(i) = params.iter().position(|p| p == name) {
-                out.extend(args[i].iter().map(|t| SpannedToken {
-                    token: t.token.clone(),
-                    span: use_site,
-                }));
-                continue;
-            }
+        if let Token::Ident(name) = &tok.token
+            && let Some(i) = params.iter().position(|p| p == name)
+        {
+            out.extend(args[i].iter().map(|t| SpannedToken {
+                token: t.token.clone(),
+                span: use_site,
+            }));
+            continue;
         }
         out.push(SpannedToken { token: tok.token.clone(), span: use_site });
     }

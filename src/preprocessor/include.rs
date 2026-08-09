@@ -35,12 +35,12 @@ impl IncludeResolver {
     }
 
     pub fn resolve(&self, name: &str, angled: bool, from_dir: Option<&Path>) -> Option<Resolved> {
-        if !angled {
-            if let Some(dir) = from_dir {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    return Some(Resolved::File(candidate));
-                }
+        if !angled
+            && let Some(dir) = from_dir
+        {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(Resolved::File(candidate));
             }
         }
         for dir in &self.search {
