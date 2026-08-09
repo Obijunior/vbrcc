@@ -850,7 +850,24 @@ impl<'a> Preprocessor<'a> {
         let body = {
             let st = self.stack.last_mut().expect("stack non-empty");
             st.lexer.retarget(body_start, end);
-            st.lexer.tokenize_region()?
+            match st.lexer.tokenize_region() {
+                Ok(toks) => toks,
+                Err(e) => {
+                    // A `#` that reaches the lexer from inside a macro body is
+                    // an attempt at stringizing or pasting, not a stray
+                    // directive. Reading the char back tells the two apart
+                    // without trusting the lexer's wording.
+                    return Err(if st.chars.get(e.span.start) == Some(&'#') {
+                        CompileError::new(
+                            "`#` and `##` are not supported in a macro body",
+                            e.span,
+                        )
+                        .with_label("stringizing and token pasting are not implemented yet")
+                    } else {
+                        e
+                    });
+                }
+            }
         };
 
         let kind = if is_function_like {
@@ -1105,6 +1122,30 @@ mod tests {
     #[test]
     fn multi_line_macro_body_via_continuation() {
         assert_eq!(kinds("#define P 1 + \\\n    2\nint x = P;"), kinds("int x = 1 + 2;"));
+    }
+
+    #[test]
+    fn stringizing_reports_what_is_actually_missing() {
+        let err = pp("#define STR(x) #x\nint a;").unwrap_err();
+        assert!(err.message.contains("macro body"), "got: {}", err.message);
+        assert!(!err.message.contains("stray"), "misleading message: {}", err.message);
+    }
+
+    #[test]
+    fn token_pasting_reports_what_is_actually_missing() {
+        let err = pp("#define CAT(a, b) a##b\nint a;").unwrap_err();
+        assert!(err.message.contains("macro body"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_hash_inside_a_string_in_a_macro_body_is_fine() {
+        assert_eq!(kinds("#define FMT \"#%d\"\nchar *f = FMT;"), kinds("char *f = \"#%d\";"));
+    }
+
+    #[test]
+    fn a_stray_hash_in_ordinary_code_keeps_its_own_message() {
+        let err = pp("int a = 1 # 2;").unwrap_err();
+        assert!(err.message.contains("stray"), "got: {}", err.message);
     }
 
     #[test]
