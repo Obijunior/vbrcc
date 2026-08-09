@@ -1,8 +1,13 @@
 //! Stage 2: turning the token stream into an abstract syntax tree.
 //!
-//! [`Parser::parse_program`] consumes the tokens from [`crate::lexer`] and produces a
-//! [`crate::ast::Program`]: a list of functions, each with typed parameters, a return
-//! type, and a body.
+//! [`Parser::parse_program`] consumes the tokens the preprocessor produced and builds a
+//! [`crate::ast::Program`]: a list of function definitions, each with typed parameters,
+//! a return type and a body, plus a list of prototypes — declarations with no body,
+//! which a header supplies.
+//!
+//! A definition and a prototype share a head, so one method parses both and the token
+//! after the parameter list decides which it was: `;` makes a prototype, `{` makes a
+//! definition.
 //!
 //! The parser is recursive descent: one method per grammar rule, with expressions
 //! handled by precedence climbing, where each level calls the next-higher-precedence

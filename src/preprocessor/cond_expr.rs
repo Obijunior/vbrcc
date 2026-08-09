@@ -11,7 +11,7 @@
 //! # Limits
 //!
 //! Bitwise `&`, `|`, `^`, the shifts, and `?:` are missing. So is the comma
-//! operator. Adding them is one row each in [`binding_power`] and [`apply`].
+//! operator. Adding them is one row each in `binding_power` and `Eval::apply`.
 
 use crate::diagnostic::{CompileError, Span};
 use crate::lexer::{SpannedToken, Token};

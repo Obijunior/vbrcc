@@ -1,8 +1,13 @@
-//! Stage 0: the preprocessor.
+//! Stage 1: the preprocessor.
 //!
 //! Owns the read loop. Walks logical lines, dispatches `#` lines as directives,
 //! and hands everything else to a per-file [`Lexer`]. Produces the token stream
-//! the parser consumes.
+//! the parser consumes. The lexer is driven from here rather than being a stage
+//! of its own, which is what lets a dead `#if` branch hold text that does not
+//! lex.
+//!
+//! An `#include` pushes a `FileState` on a stack. The line loop always reads
+//! from the top and pops when a file runs out, so nesting needs no special case.
 
 pub mod normalize;
 pub mod macros;
@@ -374,14 +379,12 @@ impl<'a> Preprocessor<'a> {
             };
 
             if at_eof {
-                if let Some(st) = self.stack.last() {
-                    if let Some(c) = st.conds.last() {
-                        return Err(CompileError::new(
-                            "unterminated conditional directive",
-                            c.span,
-                        )
-                        .with_label("this conditional is never closed"));
-                    }
+                if let Some(c) = self.stack.last().and_then(|st| st.conds.last()) {
+                    return Err(CompileError::new(
+                        "unterminated conditional directive",
+                        c.span,
+                    )
+                    .with_label("this conditional is never closed"));
                 }
                 self.stack.pop();
                 self.chain.pop();

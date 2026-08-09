@@ -1,4 +1,4 @@
-//! Stage 1: turning C source text into a token stream.
+//! Turning C source text into a token stream.
 //!
 //! [`Lexer::tokenize`] scans the source once and returns a `Vec<SpannedToken>`, or a
 //! [`CompileError`] pointing at the first character it could not recognise.
@@ -16,7 +16,7 @@
 //! - A `#` reaching the lexer is a **hard error**. Directive lines are consumed by
 //!   [`crate::preprocessor`] before the lexer ever sees them, so a stray `#` means
 //!   either a `#` in the middle of a line or a preprocessor bug.
-//! - The lexer is no longer stage 1. The preprocessor owns the read loop and calls
+//! - The lexer is not a stage of its own. The preprocessor owns the read loop and calls
 //!   [`Lexer::for_region`] / [`Lexer::retarget`] to tokenize one logical line at a
 //!   time. [`Lexer::new`] still tokenizes a whole string as file 0, which is what
 //!   the tests use.

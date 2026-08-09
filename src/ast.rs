@@ -1,9 +1,14 @@
 //! The abstract syntax tree and the type system.
 //!
 //! These are the data structures every stage after the parser operates on.
-//! [`Program`] holds a list of [`Function`]s; a function body is a list of [`Stmt`];
-//! statements contain [`Expr`] trees. Expressions are wrapped in [`TypedExpr`], which
-//! pairs an expression with its [`Span`] and its [`Type`].
+//! [`Program`] holds a list of [`Function`]s and a list of [`FuncDecl`]s — the
+//! prototypes, which have no body. A function body is a list of [`Stmt`]; statements
+//! contain [`Expr`] trees. Expressions are wrapped in [`TypedExpr`], which pairs an
+//! expression with its [`Span`] and its [`Type`].
+//!
+//! Prototypes are kept out of `functions` on purpose. [`crate::codegen`] emits a label
+//! and a frame for everything in that list, and a prototype must emit nothing — its
+//! symbol comes from the C runtime.
 //!
 //! The `ty` field starts as [`Type::Unknown`] when the parser builds the tree, and is
 //! filled in by [`crate::typeck`]. By the time [`crate::codegen`] sees the tree, every

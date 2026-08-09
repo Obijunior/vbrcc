@@ -12,6 +12,11 @@
 //! - Assigning to something that is not an lvalue. An lvalue is a variable, a
 //!   dereference, or an index. The parser accepts any expression on the left of `=`,
 //!   and this is where that gets caught.
+//! - Calling a function with the wrong number of arguments. The signature comes from a
+//!   prototype or from a definition in the same file; a variadic function needs at
+//!   least its named parameters. A call to a name that was never declared is left
+//!   alone, because C89 permits it and programs written before `#include` worked rely
+//!   on that.
 //!
 //! # Scoping
 //!

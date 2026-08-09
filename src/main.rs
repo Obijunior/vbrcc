@@ -128,7 +128,7 @@ fn main() {
     #[cfg(windows)]
     enable_ansi();
 
-    // --- Stage 0: Preprocess ---
+    // --- Stage 1: Preprocess ---
     let spanned_tokens = preprocessor::Preprocessor::with_search_path(&mut sources, include_dirs)
         .run(main_file)
         .unwrap_or_else(|e| {
@@ -171,13 +171,13 @@ fn main() {
         eprintln!("{:#?}", program);
     }
 
-    // --- Stage 2.5: Type check ---
+    // --- Stage 3: Type check ---
     typeck::check(&mut program).unwrap_or_else(|e| {
         eprint!("{}", diagnostic::render(&sources, &e, use_color));
         process::exit(1);
     });
 
-    // --- Stage 3: Codegen ---
+    // --- Stage 4: Codegen ---
     let mut codegen = codegen::Codegen::new();
     let asm = codegen.generate(&program).unwrap_or_else(|e| {
         eprint!("{}", diagnostic::render(&sources, &e, use_color));
@@ -198,7 +198,7 @@ fn main() {
 
     println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
 
-    // --- Assemble and link ---
+    // --- Stage 5: Assemble and link ---
     let bin_path = if use_gcc || use_lld {
         output_path.with_extension("exe")
     } else if output_path.extension().is_none() {

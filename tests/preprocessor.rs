@@ -81,8 +81,8 @@ fn run_exit_code(exe: &Path) -> Option<i32> {
     }
 }
 
-/// Regression: `main.rs` once kept the old Stage 1 lexer call alongside the new
-/// Stage 0 preprocessor call. The second binding shadowed the first, so the
+/// Regression: `main.rs` once kept its old direct lexer call alongside the new
+/// preprocessor call. The second binding shadowed the first, so the
 /// parser consumed lexer tokens, the preprocessor's output was discarded, and
 /// `#define` silently did nothing. Every unit test still passed.
 #[test]

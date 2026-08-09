@@ -61,10 +61,11 @@
 //! | `-E` | Preprocess only; print the expanded source and exit | none |
 //! | `-I <dir>` | Add a directory to the `#include` search path | |
 //!
-//! Use `--lld-link` when the program calls C standard library functions such as
-//! `printf`. The default backend will build such a program and report success, but its
-//! import-table support is still in development and the resulting executable currently
-//! fails to start. Self-contained programs work fine on the default path.
+//! Use `--lld-link` for a program that imports from **more than one DLL**. The default
+//! backend writes a working import table, but it currently targets a single DLL
+//! (`msvcrt.dll`), so a call into `kernel32`, `user32`, or the UCRT will not resolve.
+//! Single-DLL C runtime calls such as `printf` and `puts` work on the default path with
+//! no external linker.
 //!
 //! # The pipeline
 //!
@@ -109,7 +110,7 @@
 //!
 //! # Supported C subset
 //!
-//! As of 0.6.0 the compiler handles integer types (`int`, `char`, `long`), `void`,
+//! The compiler handles integer types (`int`, `char`, `long`), `void`,
 //! pointers, arrays, casts, address-of and dereference, pointer arithmetic,
 //! arithmetic and bitwise operators, comparisons, compound assignment,
 //! post-increment/decrement, function definitions and calls, function prototypes
@@ -133,10 +134,15 @@
 //!   a search directory, and a directory on that path shadows a bundled header.
 //! - **`-E` prints the preprocessed source** and exits, which is the fastest way to
 //!   see what macro expansion actually produced.
-//! - **Type sizes are loose.** Every scalar and every pointer is currently 8 bytes,
-//!   and an array reserves 8 bytes per element. True widths (`char` = 1, `int` = 4)
-//!   are a planned phase. [`ast::Type::size`] and [`ast::Type::align`] are the single
-//!   place that controls this.
+//! - **`long` is the wrong width for the target.** Scalars otherwise carry true C
+//!   widths (`char` = 1, `int` = 4), and codegen sizes every load, store, and stack
+//!   slot from them. But `long` is 8 bytes here, which is the Linux LP64 width; the
+//!   Windows target this compiler actually emits is LLP64, where `long` is 4. Making
+//!   the width target-dependent is a planned phase. [`ast::Type::size`] and
+//!   [`ast::Type::align`] are the single place that controls this.
+//! - **Calls take at most four arguments.** Codegen reports an error past
+//!   `rcx`/`rdx`/`r8`/`r9`; stack arguments are not implemented. `printf` therefore
+//!   accepts a format string plus three values.
 //!
 //! # Debugging
 //!
