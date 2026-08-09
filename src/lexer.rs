@@ -48,6 +48,7 @@ pub enum Token {
     While,
     If,
     Else,
+    Const,
 
     // operators
     Minus,
@@ -86,6 +87,8 @@ pub enum Token {
     Ampersand,
     LBracket,
     RBracket,
+    /// `...`, the variadic marker in a parameter list.
+    Ellipsis,
 
     EOF,
 }
@@ -113,6 +116,8 @@ impl Token {
             Token::While => "`while`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
+            Token::Const => "`const`".to_string(),
+            Token::Ellipsis => "`...`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Plus => "`+`".to_string(),
             Token::Star => "`*`".to_string(),
@@ -170,6 +175,8 @@ impl Token {
             Token::While => "while".to_string(),
             Token::If => "if".to_string(),
             Token::Else => "else".to_string(),
+            Token::Const => "const".to_string(),
+            Token::Ellipsis => "...".to_string(),
             Token::Minus => "-".to_string(),
             Token::Plus => "+".to_string(),
             Token::Star => "*".to_string(),
@@ -368,6 +375,7 @@ impl Lexer {
             "while" => Token::While,
             "if" => Token::If,
             "else" => Token::Else,
+            "const" => Token::Const,
             _ => Token::Ident(ident),
         }
     }
@@ -388,6 +396,28 @@ impl Lexer {
             Some(']') => { self.advance(); Token::RBracket },
             Some(';') => { self.advance(); Token::Semicolon },
             Some(',') => { self.advance(); Token::Comma },
+            Some('.') => {
+                self.advance();
+                if self.current() == Some('.') {
+                    self.advance();
+                    if self.current() == Some('.') {
+                        self.advance();
+                        Token::Ellipsis
+                    } else {
+                        return Err(CompileError::new(
+                            "unexpected `..`",
+                            Span::in_file(self.file, start, self.position),
+                        )
+                        .with_label("did you mean `...`?"));
+                    }
+                } else {
+                    return Err(CompileError::new(
+                        "unexpected character `.`",
+                        Span::in_file(self.file, start, self.position),
+                    )
+                    .with_label("struct members and floating point are not supported yet"));
+                }
+            },
             Some('-') => { 
                 self.advance();
                 match self.current() {
@@ -762,6 +792,28 @@ mod tests {
         let toks = Lexer::new("int x;").tokenize().unwrap();
         assert_eq!(toks[0].span.file, 0);
         assert_eq!(toks[0].span.start, 0);
+    }
+
+    #[test]
+    fn ellipsis_is_one_token() {
+        let toks = Lexer::new("int printf(const char *f, ...);").tokenize().unwrap();
+        let kinds: Vec<Token> = toks.into_iter().map(|t| t.token).collect();
+        assert!(kinds.contains(&Token::Ellipsis), "got {kinds:?}");
+        assert!(kinds.contains(&Token::Const), "got {kinds:?}");
+    }
+
+    #[test]
+    fn a_lone_dot_is_a_located_error() {
+        let src = "int x = a.b;";
+        let err = Lexer::new(src).tokenize().unwrap_err();
+        assert!(err.message.contains('.'), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find('.').unwrap());
+    }
+
+    #[test]
+    fn two_dots_are_rejected_with_a_hint() {
+        let err = Lexer::new("int f(..);").tokenize().unwrap_err();
+        assert!(err.label.as_deref().unwrap_or("").contains("..."), "got: {:?}", err.label);
     }
 
     #[test]

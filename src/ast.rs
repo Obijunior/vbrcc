@@ -146,9 +146,24 @@ pub struct Function {
     pub span: Span,
 }
 
+/// A function declared but not defined here: a prototype.
+///
+/// Prototypes live apart from [`Function`] because codegen walks `functions`
+/// and emits a label and a frame for each. A prototype with an empty body
+/// would emit a symbol that collides with the real one in the C runtime.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncDecl {
+    pub name: String,
+    pub return_type: Type,
+    pub params: Vec<(Type, String)>,
+    pub variadic: bool,
+    pub span: Span,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub decls: Vec<FuncDecl>,
 }
 
 #[cfg(test)]

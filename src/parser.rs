@@ -28,6 +28,12 @@ pub struct Parser {
     pos: usize,
 }
 
+/// What one top-level item turned out to be.
+enum TopLevel {
+    Function(Function),
+    Decl(FuncDecl),
+}
+
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Parser { tokens, pos: 0 }
@@ -82,14 +88,18 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Result<Program, CompileError> {
         let mut functions = Vec::new();
+        let mut decls = Vec::new();
         while self.current() != &Token::EOF {
-            functions.push(self.parse_function()?);
+            match self.parse_top_level()? {
+                TopLevel::Function(f) => functions.push(f),
+                TopLevel::Decl(d) => decls.push(d),
+            }
         }
-        Ok(Program { functions })
+        Ok(Program { functions, decls })
     }
 
     fn is_type_start(tok: &Token) -> bool {
-        matches!(tok, Token::Int | Token::Char | Token::Long | Token::Void)
+        matches!(tok, Token::Int | Token::Char | Token::Long | Token::Void | Token::Const)
     }
 
     fn parse_block(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
@@ -108,6 +118,11 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type, CompileError> {
+        // `const` carries nothing this compiler acts on. Accept it and drop it,
+        // so a header written for a real compiler still parses.
+        while self.current() == &Token::Const {
+            self.advance();
+        }
         let span = self.current_span();
         let mut ty = match self.advance().clone() {
             Token::Int => Type::Int,
@@ -122,18 +137,25 @@ impl Parser {
                 .with_label("expected `int`, `char`, `long`, or `void`"));
             }
         };
-        while self.current() == &Token::Star {
-            self.advance();
-            ty = Type::Pointer(Box::new(ty));
+        loop {
+            if self.current() == &Token::Star {
+                self.advance();
+                ty = Type::Pointer(Box::new(ty));
+            } else if self.current() == &Token::Const {
+                self.advance();
+            } else {
+                break;
+            }
         }
         Ok(ty)
     }
 
-    fn parse_function(&mut self) -> Result<Function, CompileError> {
+    /// One top-level item. A prototype and a definition share a head, so both
+    /// are parsed here and told apart by the token after the parameter list.
+    fn parse_top_level(&mut self) -> Result<TopLevel, CompileError> {
         let start = self.current_span();
         let return_type = self.parse_type()?;
 
-        // function name
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -144,21 +166,70 @@ impl Parser {
             }
         };
 
-        let mut params = Vec::new();
         self.expect(&Token::LParen)?;
+        let (params, variadic) = self.parse_param_list()?;
+        self.expect(&Token::RParen)?;
+
+        if self.current() == &Token::Semicolon {
+            self.advance();
+            let span = start.to(self.previous_span());
+            return Ok(TopLevel::Decl(FuncDecl { name, return_type, params, variadic, span }));
+        }
+
+        if variadic {
+            return Err(CompileError::new(
+                format!("cannot define the variadic function `{name}`"),
+                start.to(self.previous_span()),
+            )
+            .with_label("`va_arg` is not supported; declare it instead"));
+        }
+
+        self.expect(&Token::LBrace)?;
+        let mut body = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            body.push(self.parse_statement()?);
+        }
+        self.expect(&Token::RBrace)?;
+
+        let span = start.to(self.previous_span());
+        Ok(TopLevel::Function(Function { name, params, return_type, body, span }))
+    }
+
+    /// Parameters between `(` and `)`, with the `)` left unconsumed.
+    ///
+    /// Returns the parameters and whether the list ends in `...`. A parameter
+    /// may be unnamed, which prototypes often are.
+    fn parse_param_list(&mut self) -> Result<(Vec<(Type, String)>, bool), CompileError> {
+        let mut params = Vec::new();
+
+        // `(void)` means no parameters, not one parameter of type void.
+        if self.current() == &Token::Void && self.peek() == &Token::RParen {
+            self.advance();
+            return Ok((params, false));
+        }
+
         while self.current() != &Token::RParen {
-            let ptype = self.parse_type()?;
-            let pname = match self.advance().clone() {
-                Token::Ident(s) => s,
-                other => {
+            if self.current() == &Token::Ellipsis {
+                self.advance();
+                if self.current() != &Token::RParen {
                     return Err(CompileError::new(
-                        format!("expected parameter name, found {}", other.describe()),
+                        "`...` must be the last parameter",
                         self.previous_span(),
                     ));
                 }
+                return Ok((params, true));
+            }
+
+            let ptype = self.parse_type()?;
+            let pname = match self.current().clone() {
+                Token::Ident(s) => {
+                    self.advance();
+                    s
+                }
+                _ => String::new(),
             };
             let ptype = if self.current() == &Token::LBracket {
-                self.advance();                                    // consume '['
+                self.advance();
                 if matches!(self.current(), Token::IntLiteral(_)) {
                     self.advance();
                 }
@@ -172,17 +243,7 @@ impl Parser {
                 self.advance();
             }
         }
-        self.expect(&Token::RParen)?;
-
-        self.expect(&Token::LBrace)?;
-        let mut body = Vec::new();
-        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-            body.push(self.parse_statement()?);
-        }
-        self.expect(&Token::RBrace)?;
-
-        let span = start.to(self.previous_span());
-        Ok(Function { name, params, return_type, body, span })
+        Ok((params, false))
     }
 
     fn parse_statement(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -194,7 +255,9 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Stmt::Return(expr)
             }
-            Token::Int | Token::Char | Token::Long | Token::Void => return self.parse_decl(),
+            Token::Int | Token::Char | Token::Long | Token::Void | Token::Const => {
+                return self.parse_decl();
+            }
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
             Token::If => return self.parse_if(),
@@ -535,6 +598,82 @@ mod tests {
     use crate::diagnostic::{Span, Spanned};
     fn e(x: Expr) -> TypedExpr { TypedExpr::new(x, Span::dummy()) }
     fn s(x: Stmt) -> Spanned<Stmt> { Spanned::new(x, Span::dummy()) }
+
+    /// Lex and parse real C text. Prototypes are easier to read as source than
+    /// as a hand-written token vector.
+    fn parse_src(src: &str) -> Result<Program, CompileError> {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        Parser::new(tokens).parse_program()
+    }
+
+    #[test]
+    fn a_prototype_parses_without_a_body() {
+        let p = parse_src("int printf(const char *fmt, ...);\nint main() { return 0; }").unwrap();
+        assert_eq!(p.decls.len(), 1);
+        assert_eq!(p.functions.len(), 1);
+        assert_eq!(p.decls[0].name, "printf");
+        assert!(p.decls[0].variadic);
+        assert_eq!(p.decls[0].params.len(), 1);
+    }
+
+    #[test]
+    fn a_void_parameter_list_means_no_parameters() {
+        let p = parse_src("int getchar(void);\nint main() { return 0; }").unwrap();
+        assert!(p.decls[0].params.is_empty());
+    }
+
+    #[test]
+    fn a_void_return_type_is_not_confused_with_a_void_parameter_list() {
+        let p = parse_src("void exit(int code);\nint main() { return 0; }").unwrap();
+        assert_eq!(p.decls[0].return_type, Type::Void);
+        assert_eq!(p.decls[0].params.len(), 1);
+    }
+
+    #[test]
+    fn const_is_parsed_and_dropped() {
+        let p = parse_src("long strlen(const char *s);\nint main() { return 0; }").unwrap();
+        assert_eq!(p.decls[0].params[0].0, Type::Pointer(Box::new(Type::Char)));
+    }
+
+    #[test]
+    fn a_parameter_may_be_unnamed() {
+        let p = parse_src("int strcmp(const char *, const char *);\nint main() { return 0; }")
+            .unwrap();
+        assert_eq!(p.decls[0].params.len(), 2);
+    }
+
+    #[test]
+    fn a_pointer_return_type_survives() {
+        let p = parse_src("void *malloc(long size);\nint main() { return 0; }").unwrap();
+        assert_eq!(p.decls[0].return_type, Type::Pointer(Box::new(Type::Void)));
+    }
+
+    #[test]
+    fn a_definition_still_parses_as_a_function() {
+        let p = parse_src("int add(int a, int b) { return a + b; }").unwrap();
+        assert_eq!(p.functions.len(), 1);
+        assert!(p.decls.is_empty());
+    }
+
+    #[test]
+    fn ellipsis_must_come_last() {
+        let err = parse_src("int f(..., int a);\nint main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("last"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_variadic_function_cannot_be_defined_here() {
+        // va_arg does not exist, so a body would compile to something that
+        // cannot read its own arguments.
+        let err = parse_src("int f(int a, ...) { return a; }").unwrap_err();
+        assert!(err.message.contains("variadic"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn const_is_accepted_on_a_local_declaration() {
+        let p = parse_src("int main() { const int x = 5; return x; }").unwrap();
+        assert_eq!(p.functions[0].body.len(), 2);
+    }
 
     #[test]
     fn parse_unary_negation_expression() {

@@ -117,9 +117,7 @@ pub struct Preprocessor<'a> {
     stack: Vec<FileState>,
     pending: VecDeque<PendingItem>,
     active: HashSet<String>,
-    /// While true, `next_raw` drains `pending` only. Macro-argument expansion
-    /// sets this. Without it, an expansion can read past the end of the
-    /// argument and consume the source that follows the macro call.
+    /// While true, `next_raw` drains `pending` only.
     sealed: bool,
     out: Vec<SpannedToken>,
     entry: FileId,

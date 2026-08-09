@@ -232,6 +232,32 @@ fn binary_accepts_a_search_directory() {
     }
 }
 
+/// The headline for Phase 5: a header full of prototypes reaches the parser,
+/// and the call it declares links against the C runtime.
+#[test]
+fn binary_calls_printf_through_stdio_header() {
+    let src = "#include <stdio.h>\nint main() { printf(\"ok\\n\"); return 42; }\n";
+    if let Some(code) = compile_and_run(src, "pp_stdio") {
+        assert_eq!(code, 42);
+    }
+}
+
+#[test]
+fn binary_rejects_a_call_that_contradicts_its_prototype() {
+    let mut c_path = std::env::temp_dir();
+    c_path.push("pp_arity.c");
+    std::fs::write(&c_path, "int add(int a, int b) { return a + b; }\nint main() { return add(1); }\n")
+        .unwrap();
+
+    let out = Command::new("cargo")
+        .args(["run", "--quiet", "--", c_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "the wrong argument count must not compile");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("takes 2 arguments"), "got:\n{stderr}");
+}
+
 /// This returned 127 before argument pre-expansion.
 #[test]
 fn binary_expands_a_macro_nested_in_its_own_argument() {
