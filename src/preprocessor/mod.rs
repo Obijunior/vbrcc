@@ -7,6 +7,7 @@
 pub mod normalize;
 pub mod macros;
 pub mod include;
+pub mod cond_expr;
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -429,33 +430,8 @@ impl<'a> Preprocessor<'a> {
             "ifndef" => return self.if_defined(i, end, false, name_start),
             "else" => return self.directive_else(file, name_start, i),
             "endif" => return self.directive_endif(file, name_start, i),
-            "if" => {
-                let live = self.stack.last().expect("stack non-empty").emitting();
-                if live {
-                    return Err(CompileError::new(
-                        "`#if` is not yet supported",
-                        Span::in_file(file, name_start, i),
-                    ));
-                }
-                let st = self.stack.last_mut().expect("stack non-empty");
-                st.conds.push(Cond {
-                    active: false,
-                    taken: true,
-                    seen_else: false,
-                    span: Span::in_file(file, name_start, i),
-                });
-                return Ok(());
-            }
-            "elif" => {
-                let outer_live = self.stack.last().expect("stack non-empty").outer_live();
-                if outer_live {
-                    return Err(CompileError::new(
-                        "`#elif` is not yet supported",
-                        Span::in_file(file, name_start, i),
-                    ));
-                }
-                return Ok(());
-            }
+            "if" => return self.directive_if(i, end, name_start),
+            "elif" => return self.directive_elif(i, end, name_start),
             _ => {}
         }
 
@@ -525,6 +501,139 @@ impl<'a> Preprocessor<'a> {
             span: Span::in_file(file, directive_start, end),
         });
         Ok(())
+    }
+
+    /// `#if EXPR`
+    fn directive_if(
+        &mut self,
+        from: usize,
+        end: usize,
+        directive_start: usize,
+    ) -> Result<(), CompileError> {
+        let (file, live) = {
+            let st = self.stack.last().expect("stack non-empty");
+            (st.file, st.emitting())
+        };
+        let span = Span::in_file(file, directive_start, end);
+
+        // A dead region is never evaluated. It may hold a directive that
+        // refers to macros this build never defines.
+        let active = live && self.eval_condition(from, end, span)? != 0;
+
+        let st = self.stack.last_mut().expect("stack non-empty");
+        st.conds.push(Cond { active, taken: active || !live, seen_else: false, span });
+        Ok(())
+    }
+
+    /// `#elif EXPR`
+    fn directive_elif(
+        &mut self,
+        from: usize,
+        end: usize,
+        directive_start: usize,
+    ) -> Result<(), CompileError> {
+        let (file, outer_live) = {
+            let st = self.stack.last().expect("stack non-empty");
+            (st.file, st.outer_live())
+        };
+        let span = Span::in_file(file, directive_start, end);
+
+        let (seen_else, already_taken) = {
+            let st = self.stack.last().expect("stack non-empty");
+            match st.conds.last() {
+                None => {
+                    return Err(CompileError::new("`#elif` without `#if`", span));
+                }
+                Some(c) => (c.seen_else, c.taken),
+            }
+        };
+        if seen_else && outer_live {
+            return Err(CompileError::new("`#elif` after `#else`", span));
+        }
+
+        // Only the first true branch runs, so a taken conditional skips the
+        // expression entirely. That is what makes `#elif defined(X)` safe after
+        // a branch that already defined X.
+        let active = if !outer_live || already_taken {
+            false
+        } else {
+            self.eval_condition(from, end, span)? != 0
+        };
+
+        let st = self.stack.last_mut().expect("stack non-empty");
+        if let Some(c) = st.conds.last_mut() {
+            c.active = active;
+            c.taken |= active;
+        }
+        Ok(())
+    }
+
+    /// Tokenize a directive line, resolve `defined`, expand macros, evaluate.
+    fn eval_condition(
+        &mut self,
+        from: usize,
+        end: usize,
+        span: Span,
+    ) -> Result<i64, CompileError> {
+        let raw = {
+            let st = self.stack.last_mut().expect("stack non-empty");
+            st.lexer.retarget(from, end);
+            st.lexer.tokenize_region()?
+        };
+        if raw.is_empty() {
+            return Err(CompileError::new("expected an expression after the directive", span));
+        }
+        let resolved = self.resolve_defined(raw)?;
+        let expanded = self.expand_list(resolved)?;
+        cond_expr::eval(&expanded, span)
+    }
+
+    /// Replace `defined(NAME)` and `defined NAME` with `1` or `0`.
+    ///
+    /// This runs before expansion because `defined` is not a macro. If `X` is
+    /// defined as `1`, then `defined(X)` is still `1`, not `defined(1)`.
+    fn resolve_defined(
+        &self,
+        toks: Vec<SpannedToken>,
+    ) -> Result<Vec<SpannedToken>, CompileError> {
+        let mut out = Vec::with_capacity(toks.len());
+        let mut i = 0;
+        while i < toks.len() {
+            if !matches!(&toks[i].token, Token::Ident(n) if n == "defined") {
+                out.push(toks[i].clone());
+                i += 1;
+                continue;
+            }
+
+            let span = toks[i].span;
+            i += 1;
+            let parenthesised = matches!(toks.get(i).map(|t| &t.token), Some(Token::LParen));
+            if parenthesised {
+                i += 1;
+            }
+            let name = match toks.get(i).map(|t| &t.token) {
+                Some(Token::Ident(n)) => n.clone(),
+                _ => {
+                    return Err(CompileError::new("expected a macro name after `defined`", span));
+                }
+            };
+            i += 1;
+            if parenthesised {
+                if !matches!(toks.get(i).map(|t| &t.token), Some(Token::RParen)) {
+                    return Err(CompileError::new(
+                        "expected `)` after the macro name",
+                        span,
+                    ));
+                }
+                i += 1;
+            }
+
+            out.push(SpannedToken {
+                token: Token::IntLiteral(self.macros.contains(&name) as i64),
+                span,
+            });
+        }
+        Ok(out)
     }
 
     fn directive_else(
@@ -1141,6 +1250,122 @@ mod tests {
     #[test]
     fn warning_directive_does_not_stop_compilation() {
         assert_eq!(kinds("#warning just so you know\nint a;"), kinds("int a;"));
+    }
+
+    // --- Task 6: #if and #elif ---
+
+    #[test]
+    fn if_with_a_true_constant_keeps_the_body() {
+        assert_eq!(kinds("#if 1\nint a;\n#endif"), kinds("int a;"));
+    }
+
+    #[test]
+    fn if_zero_skips_the_body_without_lexing() {
+        assert_eq!(kinds("#if 0\nthis ' is | not @@ C\n#endif\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn if_compares_a_macro_value() {
+        assert_eq!(kinds("#define LEVEL 2\n#if LEVEL > 1\nint a;\n#endif"), kinds("int a;"));
+        assert_eq!(kinds("#define LEVEL 2\n#if LEVEL > 5\nint dead;\n#endif\nint b;"),
+                   kinds("int b;"));
+    }
+
+    #[test]
+    fn if_expands_a_function_like_macro() {
+        assert_eq!(kinds("#define TWICE(x) ((x) * 2)\n#if TWICE(3) == 6\nint a;\n#endif"),
+                   kinds("int a;"));
+    }
+
+    #[test]
+    fn defined_operator_works_both_ways() {
+        assert_eq!(kinds("#define Y 1\n#if defined(Y)\nint a;\n#endif"), kinds("int a;"));
+        assert_eq!(kinds("#if defined NOPE\nint dead;\n#endif\nint b;"), kinds("int b;"));
+    }
+
+    #[test]
+    fn defined_is_resolved_before_expansion() {
+        // Y expands to 1. If `defined` ran after expansion it would see
+        // `defined(1)`, which is not a macro name.
+        assert_eq!(kinds("#define Y 1\n#if defined(Y) && Y == 1\nint a;\n#endif"),
+                   kinds("int a;"));
+    }
+
+    #[test]
+    fn defined_without_a_name_is_an_error() {
+        let err = pp("#if defined()\nint a;\n#endif").unwrap_err();
+        assert!(err.message.contains("macro name"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_undefined_identifier_is_zero() {
+        assert_eq!(kinds("#if NOPE\nint dead;\n#endif\nint a;"), kinds("int a;"));
+        assert_eq!(kinds("#if !NOPE\nint a;\n#endif"), kinds("int a;"));
+    }
+
+    #[test]
+    fn elif_selects_the_first_true_branch() {
+        let src = "#define L 2\n#if L == 1\nint one;\n#elif L == 2\nint two;\n#else\nint other;\n#endif";
+        assert_eq!(kinds(src), kinds("int two;"));
+    }
+
+    #[test]
+    fn elif_falls_through_to_else() {
+        let src = "#define L 9\n#if L == 1\nint one;\n#elif L == 2\nint two;\n#else\nint other;\n#endif";
+        assert_eq!(kinds(src), kinds("int other;"));
+    }
+
+    #[test]
+    fn only_the_first_true_elif_branch_runs() {
+        let src = "#if 1\nint first;\n#elif 1\nint second;\n#endif";
+        assert_eq!(kinds(src), kinds("int first;"));
+    }
+
+    #[test]
+    fn logical_operators_give_the_right_value() {
+        assert_eq!(kinds("#if 1 || 0\nint a;\n#endif"), kinds("int a;"));
+        assert_eq!(kinds("#if 1 && 0\nint dead;\n#endif\nint b;"), kinds("int b;"));
+    }
+
+    #[test]
+    fn a_bad_if_expression_is_an_error() {
+        let err = pp("#if 1 +\nint a;\n#endif").unwrap_err();
+        assert!(err.message.contains("expected"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_empty_if_is_an_error() {
+        let err = pp("#if\nint a;\n#endif").unwrap_err();
+        assert!(err.message.contains("expected an expression"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn elif_without_an_opener_is_an_error() {
+        let err = pp("int a;\n#elif 1\n").unwrap_err();
+        assert!(err.message.contains("without"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn elif_after_else_is_an_error() {
+        let err = pp("#if 0\n#else\n#elif 1\n#endif").unwrap_err();
+        assert!(err.message.contains("after `#else`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_bad_expression_inside_a_dead_branch_is_not_evaluated() {
+        assert_eq!(kinds("#if 0\n#if 1 +\nint dead;\n#endif\n#endif\nint a;"), kinds("int a;"));
+    }
+
+    #[test]
+    fn nested_ifs_pair_correctly() {
+        let src = "#if 1\nint outer;\n#if 0\nint dead;\n#else\nint inner;\n#endif\n#endif";
+        assert_eq!(kinds(src), kinds("int outer; int inner;"));
+    }
+
+    #[test]
+    fn an_unterminated_if_is_reported() {
+        let err = pp("#if 1\nint a;\n").unwrap_err();
+        assert!(err.message.contains("unterminated"), "got: {}", err.message);
     }
 
     // --- Task 3: #include ---

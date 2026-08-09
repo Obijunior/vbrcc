@@ -232,6 +232,45 @@ fn binary_accepts_a_search_directory() {
     }
 }
 
+#[test]
+fn if_expression_selects_a_branch_in_e_output() {
+    assert_eq!(e("#define L 2\n#if L == 1\nint one;\n#elif L == 2\nint two;\n#endif"),
+               "int two ;");
+}
+
+#[test]
+fn binary_selects_a_branch_by_if_expression() {
+    let src = r#"
+#include <limits.h>
+#define LEVEL 3
+#if LEVEL > 2 && defined(INT_MAX)
+#define VALUE 42
+#elif LEVEL > 1
+#define VALUE 7
+#else
+#define VALUE 1
+#endif
+int main() { return VALUE; }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_if_expr") {
+        assert_eq!(code, 42);
+    }
+}
+
+/// A false `#if` must skip text that does not lex, exactly as `#ifdef` does.
+#[test]
+fn binary_compiles_with_garbage_in_a_false_if_branch() {
+    let src = r#"
+#if 0
+    this block is ' not | valid C @@ and must never be lexed
+#endif
+int main() { return 42; }
+"#;
+    if let Some(code) = compile_and_run(src, "pp_if_dead_garbage") {
+        assert_eq!(code, 42);
+    }
+}
+
 /// The headline for Phase 5: a header full of prototypes reaches the parser,
 /// and the call it declares links against the C runtime.
 #[test]
