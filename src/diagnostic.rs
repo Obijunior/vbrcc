@@ -138,20 +138,37 @@ impl<T> Deref for Spanned<T> {
     }
 }
 
+/// A secondary line below the main frame.
+///
+/// A note with a span prints its location after the message, the way clang
+/// prints "In file included from prog.c:1:". A note without one is free text,
+/// such as the list of directories an `#include` search tried.
+#[derive(Debug, Clone)]
+pub struct Note {
+    pub message: String,
+    pub span: Option<Span>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompileError {
     pub message: String,
     pub span: Span,
     pub label: Option<String>,
+    pub notes: Vec<Note>,
 }
 
 impl CompileError {
     pub fn new(message: impl Into<String>, span: Span) -> Self {
-        CompileError { message: message.into(), span, label: None }
+        CompileError { message: message.into(), span, label: None, notes: Vec::new() }
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    pub fn with_note(mut self, message: impl Into<String>, span: Option<Span>) -> Self {
+        self.notes.push(Note { message: message.into(), span });
         self
     }
 }
@@ -165,6 +182,21 @@ fn paint(text: &str, code: &str, use_color: bool) -> String {
     }
 }
 
+/// Line number, column, and start offset of the line holding `offset`.
+/// The line and the column both count from 1.
+fn line_col(chars: &[char], offset: usize) -> (usize, usize, usize) {
+    let offset = offset.min(chars.len());
+    let mut line_no = 1;
+    let mut line_start = 0;
+    for (i, c) in chars.iter().enumerate().take(offset) {
+        if *c == '\n' {
+            line_no += 1;
+            line_start = i + 1;
+        }
+    }
+    (line_no, offset - line_start + 1, line_start)
+}
+
 /// Render a diagnostic as a rustc-style frame ending in a newline.
 pub fn render(map: &SourceMap, err: &CompileError, use_color: bool) -> String {
     let file = map.file(err.span.file);
@@ -172,21 +204,13 @@ pub fn render(map: &SourceMap, err: &CompileError, use_color: bool) -> String {
     let chars: Vec<char> = file.text.chars().collect();
     let start = err.span.start.min(chars.len());
 
-    let mut line_start = 0;
-    let mut line_no = 1;
-    for i in 0..start {
-        if chars[i] == '\n' {
-            line_no += 1;
-            line_start = i + 1;
-        }
-    }
+    let (line_no, col, line_start) = line_col(&chars, start);
 
     let mut line_end = start;
     while line_end < chars.len() && chars[line_end] != '\n' {
         line_end += 1;
     }
 
-    let col = start - line_start + 1;
     let line_text: String = chars[line_start..line_end].iter().collect();
 
     let span_end = err.span.end.min(line_end);
@@ -233,6 +257,21 @@ pub fn render(map: &SourceMap, err: &CompileError, use_color: bool) -> String {
     }
     out.push_str(&red(&caret));
     out.push('\n');
+
+    let cyan = |s: &str| paint(s, "1;36", use_color);
+    for note in &err.notes {
+        out.push_str(&format!(" {pad} "));
+        out.push_str(&cyan("note:"));
+        out.push(' ');
+        out.push_str(&note.message);
+        if let Some(span) = note.span {
+            let nf = map.file(span.file);
+            let nchars: Vec<char> = nf.text.chars().collect();
+            let (nline, ncol, _) = line_col(&nchars, span.start);
+            out.push_str(&format!(" {}:{}:{}", nf.name, nline, ncol));
+        }
+        out.push('\n');
+    }
 
     out
 }
@@ -378,6 +417,35 @@ mod tests {
     fn spans_still_compare_equal_across_files() {
         // AST structural equality depends on this staying true.
         assert_eq!(Span::in_file(0, 0, 3), Span::in_file(7, 10, 42));
+    }
+
+    #[test]
+    fn render_prints_notes_below_the_main_frame() {
+        let mut map = SourceMap::new();
+        map.add("prog.c", "#include \"h.h\"\n".to_string());
+        let h = map.add("h.h", "bad\n".to_string());
+        let err = CompileError::new("boom", Span::in_file(h, 0, 3))
+            .with_note("in file included from", Some(Span::in_file(0, 0, 8)));
+        let out = render(&map, &err, false);
+        assert!(out.contains("--> h.h:1:1"), "got:\n{out}");
+        assert!(out.contains("note: in file included from prog.c:1:1"), "got:\n{out}");
+    }
+
+    #[test]
+    fn a_note_without_a_span_prints_only_its_message() {
+        let err = CompileError::new("boom", Span::new(0, 1))
+            .with_note("searched: <bundled headers>", None);
+        let out = render(&SourceMap::single("f", "x"), &err, false);
+        assert!(out.contains("note: searched: <bundled headers>"), "got:\n{out}");
+    }
+
+    #[test]
+    fn notes_render_in_the_order_they_were_added() {
+        let err = CompileError::new("boom", Span::new(0, 1))
+            .with_note("first", None)
+            .with_note("second", None);
+        let out = render(&SourceMap::single("f", "x"), &err, false);
+        assert!(out.find("first").unwrap() < out.find("second").unwrap(), "got:\n{out}");
     }
 
     #[test]
