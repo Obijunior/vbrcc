@@ -59,6 +59,7 @@
 //! | `-o <path>` | Set the output path (default: input with no extension) | |
 //! | `--keep-artifacts` | Keep intermediate `.s` / `.obj` files | |
 //! | `-E` | Preprocess only; print the expanded source and exit | none |
+//! | `-I <dir>` | Add a directory to the `#include` search path | |
 //!
 //! Use `--lld-link` when the program calls C standard library functions such as
 //! `printf`. The default backend will build such a program and report success, but its
@@ -111,8 +112,9 @@
 //! As of 0.6.0 the compiler handles integer types (`int`, `char`, `long`), `void`,
 //! pointers, arrays, casts, address-of and dereference, pointer arithmetic,
 //! arithmetic and bitwise operators, comparisons, compound assignment,
-//! post-increment/decrement, function definitions and calls, `if`/`else`, `while`,
-//! and `for`.
+//! post-increment/decrement, function definitions and calls, function prototypes
+//! (including variadic ones such as `printf`), `const` as an accepted and dropped
+//! qualifier, `if`/`else`, `while`, and `for`.
 //!
 //! Not yet implemented: `struct`, `union`, `enum`, `typedef`, `unsigned`, `float`,
 //! `double`, `switch`, `do`/`while`, `break`, `continue`, block-level scope
@@ -121,11 +123,14 @@
 //! Two behaviours are worth calling out explicitly, because they fail quietly rather
 //! than loudly:
 //!
-//! - **The preprocessor is partial.**  **`#include` is recognised but does nothing yet** —
-//!   `#include <stdio.h>` still compiles without error and without effect, so
-//!   declarations the header would have provided are absent.
-//!   The `#if` family, `#` stringizing, and `##` pasting all report an explicit
-//!   "not yet supported" error rather than failing silently.
+//! - **The preprocessor is nearly complete.** `#include`, `#define` for object-like
+//!   and function-like macros, `#undef`, the whole `#if` family with a
+//!   constant-expression evaluator, `#error`, `#warning`, and `#pragma once` all
+//!   work. Missing: `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`.
+//!   Each reports an explicit error rather than failing silently.
+//!   A small header set ships inside the binary (`limits.h`, `stddef.h`,
+//!   `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, `stdlib.h`); `-I <dir>` adds
+//!   a search directory, and a directory on that path shadows a bundled header.
 //! - **`-E` prints the preprocessed source** and exits, which is the fastest way to
 //!   see what macro expansion actually produced.
 //! - **Type sizes are loose.** Every scalar and every pointer is currently 8 bytes,

@@ -183,13 +183,42 @@ such as a dereference of a non-pointer value.
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
 * Block-level scope. All variables share one flat scope per function
-* Preprocessor directives
+* `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`
 
-> **Note: preprocessor directives are skipped, not rejected.** Any line beginning with
-> `#` is discarded by the lexer, so `#include <stdio.h>` compiles without error *and
-> without effect*. Nothing the header would have declared exists. Calls to `printf` resolve
-> anyway — the default backend imports the symbol from `msvcrt.dll` directly, and
-> `--lld-link` resolves it the same way.
+## Preprocessor
+
+| Feature | Notes |
+|---|---|
+| `#include <name>` / `#include "name"` | Quoted form searches the includer's directory first |
+| `-I <dir>` | Adds a search directory; a match there shadows a bundled header |
+| `#define` | Object-like and function-like macros, with argument pre-expansion |
+| `#undef` | |
+| `#if`, `#elif`, `#else`, `#endif` | Full constant-expression evaluator with `defined` |
+| `#ifdef`, `#ifndef` | |
+| `#error`, `#warning` | |
+| `#pragma once` | Every other pragma is ignored |
+| Predefined | `__FILE__`, `__LINE__`, `__STDC__`, `__STDC_VERSION__`, `_WIN32`, `_WIN64` |
+
+A small header set ships inside the binary, so no data files are installed:
+`limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, `stdlib.h`.
+They are deliberately small, and use macro stopgaps where a language feature is
+missing — `size_t` is a macro for `long` until `typedef` lands.
+
+`-E` prints the preprocessed source and exits, which is the fastest way to see
+what expansion actually produced.
+
+```c
+#include <stdio.h>
+
+int main() {
+    printf("hello from vbrcc\n");
+    return 0;
+}
+```
+
+> **Note:** a call whose function has a prototype is checked for argument count.
+> A call to a function with no declaration at all is still allowed, so programs
+> written before `#include` worked keep compiling.
 
 ## Assembler
 
@@ -270,7 +299,8 @@ cargo test
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
 - `struct`, `union`, `enum`, and `typedef`
 - More control flow: `switch`, `do-while`, `break`, `continue`
-- Preprocessor: `#include`, `#define`
+- Preprocessor: `#` stringizing, `##` pasting, `__VA_ARGS__`
+- More than four call arguments
 - Block-level scope
 
 **Later**
