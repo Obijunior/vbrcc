@@ -1,13 +1,15 @@
 //! Stage 1: the preprocessor.
 //!
-//! Owns the read loop. Walks logical lines, dispatches `#` lines as directives,
-//! and hands everything else to a per-file [`Lexer`]. Produces the token stream
-//! the parser consumes. The lexer is driven from here rather than being a stage
-//! of its own, which is what lets a dead `#if` branch hold text that does not
-//! lex.
+//! This module owns the read loop. It walks logical lines, handles each `#` line as a
+//! directive, and gives every other line to a per-file [`Lexer`]. Its output is the
+//! token stream that the parser reads.
 //!
-//! An `#include` pushes a `FileState` on a stack. The line loop always reads
-//! from the top and pops when a file runs out, so nesting needs no special case.
+//! The lexer runs from here instead of being a stage of its own. That is what lets a
+//! dead `#if` branch hold text that does not lex: the loop skips the line first.
+//!
+//! An `#include` pushes a `FileState` onto a stack. The line loop always reads from the
+//! top of the stack and pops a file when that file ends, so nesting needs no special
+//! case.
 
 pub mod normalize;
 pub mod macros;

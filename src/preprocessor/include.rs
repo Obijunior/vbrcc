@@ -1,10 +1,11 @@
 //! Header lookup for `#include`.
 //!
-//! Three places are searched, in order:
+//! The resolver searches three places in this order:
 //!
-//! 1. The directory of the including file, for `#include "name"` only.
-//! 2. Every `-I` directory, in command-line order.
-//! 3. The bundled header set.
+//! 1. The directory of the file that holds the directive. This applies to
+//!    `#include "name"` only.
+//! 2. Each `-I` directory, in command-line order.
+//! 3. The bundled headers.
 
 use std::path::{Path, PathBuf};
 

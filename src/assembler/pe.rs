@@ -1,34 +1,32 @@
-//! Writing a complete Windows PE32+ executable.
+//! The Windows PE32+ executable writer.
 //!
-//! This module wraps raw machine code in a minimal but valid Portable Executable
-//! image. It is the default output path, and the reason the compiler needs no linker.
-//! The layout follows Microsoft's *PE Format* specification: a DOS stub kept for
-//! backwards compatibility, a PE signature, a COFF header, an optional header (which
-//! is required for executables despite the name), and a section table.
+//! [`create_pe_wrapper`] takes the finished `.text`, `.data`, and `.idata` bytes and
+//! returns a complete image. This is the default output path, and the reason the
+//! compiler needs no linker. The layout follows Microsoft's *PE Format* specification.
 //!
 //! # Alignment
 //!
-//! PE images carry two different alignments and they are not interchangeable. Section
-//! data is padded to `FileAlignment` on disk (512 bytes here) but mapped at
-//! `SectionAlignment` in memory (4096, one page). Every address therefore exists in two
-//! forms: a file offset and a relative virtual address (RVA). Confusing the two yields
-//! an image that inspects fine in a hex dump and fails to load.
+//! A PE image has two alignments, and they are not interchangeable. Section data uses
+//! `FileAlignment` on disk, which is 512 bytes here. The loader maps that data at
+//! `SectionAlignment` in memory, which is 4096 bytes. Every address therefore has two
+//! forms: a file offset and a relative virtual address (RVA). If you use one form where
+//! the other belongs, the image looks correct in a hex dump and fails to load.
 //!
 //! # Imports
 //!
-//! Calls to external functions such as `printf` are resolved through the `.idata`
-//! section, which holds an import directory, a lookup table, and an Import Address
-//! Table. The loader walks the directory, resolves each named import against the
-//! exporting DLL, and overwrites the IAT entry with the real address, so an indirect
-//! call through the IAT slot reaches the right function at run time.
+//! The `.idata` section holds an import directory, a lookup table, and an Import
+//! Address Table (IAT). At load time, the loader reads the directory, finds each named
+//! function in its DLL, and writes the real address into the IAT entry. An indirect
+//! call through that IAT slot then reaches the function.
 //!
-//! **This path is not finished.** An image with imports is emitted and reported as a
-//! success, but currently fails to load (exit code `127`, no output), while
-//! import-free images run correctly. Until it is fixed, programs calling into the C
-//! runtime should be built through [`super::coff`] and `lld-link`.
+//! This works for one DLL. `build_import_section` in [`super`] uses the fixed name
+//! `msvcrt.dll` and emits one import descriptor, so a libc call such as `printf` runs.
+//! A symbol from `kernel32`, `user32`, or the UCRT goes into the same descriptor and
+//! fails to resolve. Such a program needs [`super::coff`] and `lld-link`.
 //!
-//! [`create_pe_wrapper`] takes finished `.text`, `.data` and `.idata` contents and
-//! returns the complete image as bytes.
+//! Data directory entry 12 (`IMAGE_DIRECTORY_ENTRY_IAT`) stays zero. The image still
+//! loads, because the loader reads the import directory at entry 1, but some tools
+//! expect entry 12.
 
 fn align_up(value: u32, align: u32) -> u32 {
     (value + align - 1) & !(align - 1)

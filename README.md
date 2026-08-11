@@ -1,23 +1,23 @@
 # VBRCC: Very Basic Rust C Compiler
 
 [![Crates.io](https://img.shields.io/crates/v/vbrcc.svg)](https://crates.io/crates/vbrcc)
-[![Docs.rs](https://docs.rs/vbrcc/badge.svg)](https://docs.rs/vbrcc)
-[![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-<!-- [![Downloads](https://img.shields.io/crates/d/vbrcc.svg)](https://crates.io/crates/vbrcc) -->
+[![Downloads](https://img.shields.io/crates/d/vbrcc.svg)](https://crates.io/crates/vbrcc)
+<!-- [![Docs.rs](https://docs.rs/vbrcc/badge.svg)](https://docs.rs/vbrcc) -->
+<!-- [![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml) -->
 
 A hobby C compiler and x86-64 assembler, written from scratch in Rust.
 
-VBRCC uses no external compiler libraries. The lexer, parser, type checker, code
-generator, and assembler are all hand-written, including the instruction encoder and
-the PE executable writer. In its default mode it needs no assembler, no linker, and no
-toolchain: it emits machine bytes and builds the Windows executable itself.
+VBRCC uses no external compiler library. The lexer, the parser, the type checker, the
+code generator, and the assembler are all hand-written. So are the instruction encoder
+and the PE executable writer. In its default mode it needs no assembler, no linker, and
+no toolchain. It emits the machine bytes and builds the Windows executable itself.
 
 ## Platform support
 
-VBRCC **runs** anywhere Rust does, but it only **emits** Windows PE/COFF binaries for
-x86-64. There is no ELF or Mach-O backend yet, so binaries produced on Linux or macOS
-will not run natively on the host. An ELF backend is on the roadmap.
+VBRCC **runs** anywhere Rust runs. It **emits** only Windows PE/COFF binaries for
+x86-64. There is no ELF or Mach-O backend yet, so a binary built on Linux or macOS does
+not run on the host. An ELF backend is on the roadmap.
 
 ## Installation
 
@@ -43,8 +43,9 @@ vbrcc --help       # or -h
 
 VBRCC compiles one C file. It writes an assembly file and an executable.
 
+
 ```console
-$ vbrcc examples/test_return.c -o program
+$ vbrcc examples/return42.c -o program
 [ SUCCESS ] :: Wrote assembly to "program.s"
 [ SUCCESS ] :: Created Windows Executable: "program.exe"
   - .text size: 34 bytes
@@ -72,9 +73,9 @@ $ vbrcc examples/test_return.c -o program
 | `--lld-link` | Built-in assembler emits a COFF `.obj`, then `lld-link` links it | LLVM (`lld-link`, `llvm-dlltool`) + Windows SDK |
 | `--gcc` | System `gcc` assembles and links | MinGW-w64 GCC |
 
-The default path is fully self-contained and needs no external toolchain. It builds a
-runnable PE with a working import table, so programs that call standard-library functions
-exported by `msvcrt.dll` — such as `printf` — run directly:
+The default path needs no external toolchain. It builds a runnable PE with a working
+import table. A program that calls a standard-library function from `msvcrt.dll`, such
+as `printf`, therefore runs directly:
 
 ```console
 $ vbrcc examples/input.c -o input
@@ -82,16 +83,16 @@ $ ./input.exe
 hello world - sum: 52
 ```
 
-> **Use `--lld-link` for programs that import from more than one DLL.** The default
-> backend's import table currently targets a single DLL (`msvcrt.dll`), so a program that
-> also calls into `kernel32`, `user32`, or the UCRT will not resolve those symbols yet.
-> For multi-DLL programs, `--lld-link` remains the working path. Single-DLL C-runtime
-> calls like `printf` work out of the box.
+> **Use `--lld-link` for a program that imports from more than one DLL.** The import
+> table of the default backend covers one DLL, `msvcrt.dll`. A program that also calls
+> into `kernel32`, `user32`, or the UCRT does not resolve those symbols yet. Use
+> `--lld-link` for such a program. A C runtime call such as `printf` works with no extra
+> setup.
 
 ### Debugging output
 
-Set any of these environment variables to dump the corresponding intermediate
-representation to stderr:
+Set any of these environment variables to write the matching intermediate form to
+stderr:
 
 | Variable | Dumps |
 |---|---|
@@ -147,9 +148,9 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 
 ### Types
 
-VBRCC has a type checker. It runs after the parser and before the code generator,
-assigning a type to every expression and reporting type errors with a source location,
-such as a dereference of a non-pointer value.
+VBRCC has a type checker. It runs after the parser and before the code generator. It
+gives a type to every expression. It reports a type error with a source location, for
+example a dereference of a value that is not a pointer.
 
 | Feature | Example |
 | --- | --- |
@@ -158,11 +159,11 @@ such as a dereference of a non-pointer value.
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
 
-> **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`,
-> pointers, and `void *` are 8. Locals occupy their true size on the stack (aligned to
-> the type), array elements pack at element size, narrow loads sign-extend
-> (`movsx` / `movsxd`), and stores write exactly the value's width. `Type::size` and
-> `Type::align` in `src/ast.rs` are the single place this is decided.
+> **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`, a
+> pointer, and `void *` are 8. A local occupies its true size on the stack, aligned to
+> its type. Array elements pack at element size. A narrow load sign-extends with `movsx`
+> or `movsxd`, and a store writes exactly the width of the value. `Type::size` and
+> `Type::align` in `src/ast.rs` are the one place that decides this.
 
 ### Statements and control flow
 
@@ -182,7 +183,8 @@ such as a dereference of a non-pointer value.
 * `struct`, `union`, `enum`, and `typedef`
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
-* Block-level scope. All variables share one flat scope per function
+* The bitwise operators `&`, `|`, `^`, `<<`, and `>>`
+* Block-level scope. Every variable shares one flat scope for each function
 * `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`
 
 ## Preprocessor
@@ -199,13 +201,13 @@ such as a dereference of a non-pointer value.
 | `#pragma once` | Every other pragma is ignored |
 | Predefined | `__FILE__`, `__LINE__`, `__STDC__`, `__STDC_VERSION__`, `_WIN32`, `_WIN64` |
 
-A small header set ships inside the binary, so no data files are installed:
-`limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, `stdlib.h`.
-They are deliberately small, and use macro stopgaps where a language feature is
-missing — `size_t` is a macro for `long` until `typedef` lands.
+A small header set ships inside the binary, so an install needs no data files:
+`limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, and `stdlib.h`.
+They are small on purpose. Each one uses a macro where a language feature is missing.
+For example, `size_t` is a macro for `long` until `typedef` arrives.
 
-`-E` prints the preprocessed source and exits, which is the fastest way to see
-what expansion actually produced.
+`-E` prints the preprocessed source and exits. This is the fastest way to see what
+expansion produced.
 
 ```c
 #include <stdio.h>
@@ -216,9 +218,9 @@ int main() {
 }
 ```
 
-> **Note:** a call whose function has a prototype is checked for argument count.
-> A call to a function with no declaration at all is still allowed, so programs
-> written before `#include` worked keep compiling.
+> **Note:** the compiler checks the argument count of a call when the function has a
+> prototype. A call to a function with no declaration is still legal, so a program
+> written before `#include` worked still compiles.
 
 ## Assembler
 
@@ -244,26 +246,26 @@ The built-in assembler (`src/assembler/`) accepts a small subset of Intel-syntax
 
 ### Output formats
 
-- **PE executable** (default). Encodes instructions into machine bytes and produces a
-  complete, loadable Windows PE32+ image with DOS header, COFF header, section table, and a
-  working import table. External calls into `msvcrt.dll` (such as `printf`) resolve through
-  that import table and run. The table currently targets a single DLL, so programs that
-  also import from other DLLs (`kernel32`, `user32`, the UCRT) still need `--lld-link`.
-- **COFF object** (used by `--lld-link`). Emits a relocatable object file with a symbol
-  table and `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to resolve.
+- **PE executable** (default). The assembler encodes the instructions and writes a
+  complete Windows PE32+ image. The image has a DOS header, a COFF header, a section
+  table, and a working import table. A call into `msvcrt.dll`, such as `printf`,
+  resolves through that table and runs. The table covers one DLL, so a program that also
+  imports from `kernel32`, `user32`, or the UCRT needs `--lld-link`.
+- **COFF object** (used by `--lld-link`). The assembler writes a relocatable object file
+  with a symbol table and `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to resolve.
 
-  > There is no standalone flag to stop at a `.obj`. COFF output is produced as part of
-  > the `--lld-link` pipeline; pass `--keep-artifacts` to retain the intermediate file.
+  > There is no separate flag that stops at a `.obj`. The `--lld-link` pipeline produces
+  > the COFF output. Pass `--keep-artifacts` to keep the intermediate file.
 
-### Inspecting the output
+### How to inspect the output
 
-- `objdump -d -M intel <exe>` disassembles the output. Comparing VBRCC's output against
-  the same program built with `--gcc` is the fastest way to spot a miscompilation.
-- `hexdump -v -e '1/1 "%02x "' <exe>` dumps the raw image bytes.
+- `objdump -d -M intel <exe>` disassembles the output. To find a miscompilation, compare
+  that output against the same program built with `--gcc`.
+- `hexdump -v -e '1/1 "%02x "' <exe>` shows the raw image bytes.
 - `gcc -S -masm=intel input.c` shows how GCC compiles the same source.
 - `gcc -S -masm=intel -O0 -fno-asynchronous-unwind-tables -fno-ident input.c` does the
-  same without optimisations or `.seh_*` directives, which lands closer to what VBRCC
-  emits.
+  same with no optimisation and no `.seh_*` directives. The result is closer in shape to
+  VBRCC's output, which makes a diff practical.
 
 ## Tests
 
@@ -310,18 +312,18 @@ cargo test
 
 ## Contributing
 
-VBRCC is a personal learning project. Until it reaches C99 compliance at v1.0.0, the
-design moves too fast for outside patches to be practical.
+VBRCC is a personal learning project. The design changes too fast for an outside patch
+to be practical. This stays true until the compiler reaches C99 compliance at v1.0.0.
 
 **Bug reports, questions, and ideas are welcome.** Please
-[open an issue](https://github.com/obijunior/vbrcc/issues). Miscompilations help most;
-a minimal C file plus the wrong output makes the ideal report.
+[open an issue](https://github.com/obijunior/vbrcc/issues). A miscompilation helps most.
+The ideal report is a minimal C file and the wrong output.
 
-**Pull requests are not being accepted at this time.** This will change at v1.0.0.
+**Pull requests are not accepted at this time.** This changes at v1.0.0.
 
 ## License
 
-VBRCC is free software: you can redistribute it and/or modify it under the terms of the
-GNU General Public License as published by the Free Software Foundation, either version
-3 of the License, or (at your option) any later version. See
+VBRCC is free software. You can redistribute it and change it under the terms of the
+GNU General Public License, as published by the Free Software Foundation. Use either
+version 3 of the License, or any later version. See
 [COPYING](https://github.com/obijunior/vbrcc/blob/main/COPYING) for the full text.

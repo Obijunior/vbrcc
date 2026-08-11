@@ -1,26 +1,25 @@
-//! Error reporting: spans, compile errors, and rustc-style rendering.
+//! Error reporting: spans, compile errors, and rustc-style frames.
 //!
-//! Every stage of the compiler returns `Result<_, CompileError>`. A [`CompileError`]
-//! carries a message, the [`Span`] it applies to, and an optional label for the caret
-//! line. [`render`] formats one into a rustc-style frame: message, file, line and
-//! column, the offending source line, and a caret underlining the span, with colour
-//! when writing to a terminal.
+//! Every stage returns `Result<_, CompileError>`. A [`CompileError`] holds a message,
+//! the [`Span`] it applies to, and an optional label for the caret line. [`render`]
+//! formats one as a rustc-style frame: the message, the file, the line and the column,
+//! the source line, and a caret under the span. It adds colour for a terminal.
 //!
-//! Compilation stops at the first error; there is no error recovery, so exactly one
-//! diagnostic is ever produced.
+//! The compiler stops at the first error. There is no error recovery, so it produces
+//! exactly one diagnostic.
 //!
-//! [`Spanned<T>`] attaches a span to any node and derefs to the inner value, which keeps
-//! span plumbing out of the way in the parser and type checker.
+//! [`Spanned<T>`] adds a span to any node and derefs to the inner value. This keeps span
+//! handling out of the way in the parser and the type checker.
 //!
 //! # Span equality
 //!
-//! **[`Span`] compares equal to every other [`Span`].** The `PartialEq` implementation
-//! ignores its fields, so that AST nodes can be compared structurally without their
-//! source positions interfering. The consequences:
+//! **A [`Span`] compares equal to every other [`Span`].** The `PartialEq`
+//! implementation ignores the fields, so a test can compare AST nodes by structure and
+//! ignore their source positions. Two rules follow:
 //!
 //! - Never use a `Span` as a `HashMap` key.
-//! - Never write `assert_eq!` on two spans in a test. It passes unconditionally.
-//!   Compare `span.start` and `span.end` individually instead.
+//! - Never write `assert_eq!` on two spans in a test. It always passes. Compare
+//!   `span.start` and `span.end` one at a time.
 
 use std::ops::Deref;
 use std::sync::OnceLock;

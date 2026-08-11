@@ -9,12 +9,13 @@
 //! | [`LinkerMode::LldLink`] | `--lld-link` | [`crate::assembler`] writes a COFF object, then `lld-link` links it | LLVM + Windows SDK |
 //! | [`LinkerMode::Gcc`] | `--gcc` | the system `gcc` assembles and links the `.s` file | MinGW-w64 GCC |
 //!
-//! The default mode is self-contained, but it resolves only what the built-in assembler
-//! can encode itself. Use `--lld-link` when the program calls into the C standard
-//! library, since a real linker must resolve those symbols against `msvcrt.dll`.
+//! The default mode needs no external tool, and its import table covers `msvcrt.dll`.
+//! A libc call such as `printf` therefore runs. Use `--lld-link` when the program also
+//! imports from a second DLL, such as `kernel32` or the UCRT.
 //!
-//! `--gcc` serves as an escape hatch and a comparison baseline. Compile the same source
-//! both ways and diff the disassembly to locate a miscompilation in the built-in path.
+//! `--gcc` is an escape hatch and a comparison baseline. Compile the same source both
+//! ways and compare the two disassemblies to find a miscompilation in the built-in
+//! path.
 
 use std::path::Path;
 use std::process::Command;

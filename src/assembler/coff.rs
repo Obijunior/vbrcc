@@ -1,30 +1,30 @@
-//! Writing a relocatable COFF object file.
+//! The relocatable COFF object writer.
 //!
-//! This is the `--lld-link` output path. Where [`super::pe`] produces a finished
-//! executable, this module produces a `.obj` with unresolved references left for an
-//! external linker to fill in, which is what makes linking against the real C runtime
-//! possible.
+//! This is the `--lld-link` output path. [`super::pe`] writes a finished executable.
+//! This module writes a `.obj` that still has unresolved references, and an external
+//! linker fills them in. That is what makes a link against the real C runtime possible.
 //!
-//! A COFF object here consists of a header, section headers and data for `.text` and
-//! `.data`, a relocation table, and a symbol table with an attached string table.
+//! An object here has a header, section headers and data for `.text` and `.data`, a
+//! relocation table, and a symbol table with a string table after it.
 //!
 //! # Symbols and relocations
 //!
-//! Every symbol is either *defined* (it lives at a known offset in one of this object's
-//! sections, emitted as `IMAGE_SYM_CLASS_STATIC` or `IMAGE_SYM_CLASS_EXTERNAL`) or
-//! *undefined*: a reference such as `printf` that the linker must resolve against
-//! another object or import library. Undefined symbols carry section number 0.
+//! A symbol is either defined or undefined. A defined symbol sits at a known offset in
+//! one of this object's sections, with the class `IMAGE_SYM_CLASS_STATIC` or
+//! `IMAGE_SYM_CLASS_EXTERNAL`. An undefined symbol, such as `printf`, has section
+//! number 0, and the linker resolves it against another object or an import library.
 //!
-//! References are emitted as `IMAGE_REL_AMD64_REL32` relocations, meaning RIP-relative
-//! 32-bit displacements. The value written into the instruction stream is a placeholder;
-//! the linker computes the final displacement once it knows where everything landed.
+//! Each reference becomes an `IMAGE_REL_AMD64_REL32` relocation, which is a
+//! RIP-relative 32-bit displacement. The value in the instruction stream is a
+//! placeholder. The linker computes the final displacement after it places every
+//! section.
 //!
 //! # String table
 //!
-//! COFF stores symbol names inline only when they fit in eight bytes. Longer names go
-//! into a trailing string table, and the symbol record instead holds a zero word
-//! followed by an offset into it. Both encodings are produced here depending on name
-//! length.
+//! COFF holds a symbol name in the symbol record only when the name fits in eight
+//! bytes. A longer name goes into the string table at the end of the file, and the
+//! record holds a zero word and then an offset into that table. This module writes both
+//! forms, by name length.
 
 use std::collections::HashMap;
 

@@ -1,30 +1,29 @@
-//! Stage 3: assigning a type to every expression, and rejecting the ones that don't work.
+//! Stage 3: the type checker.
 //!
-//! [`check`] walks the AST produced by [`crate::parser`] and mutates it in place,
-//! writing a resolved [`Type`] into the `ty` field of every `TypedExpr`. It runs before
-//! code generation, so the code generator can assume every expression is typed.
+//! [`check`] walks the AST from [`crate::parser`] and changes it in place. It writes a
+//! resolved [`Type`] into the `ty` field of every `TypedExpr`. It runs before code
+//! generation, so the code generator can trust that every expression has a type.
 //!
 //! # Errors reported here
 //!
-//! - Use of an undeclared variable.
-//! - Dereferencing a value that is not a pointer.
-//! - Indexing a value that is not a pointer or an array.
-//! - Assigning to something that is not an lvalue. An lvalue is a variable, a
-//!   dereference, or an index. The parser accepts any expression on the left of `=`,
-//!   and this is where that gets caught.
-//! - Calling a function with the wrong number of arguments. The signature comes from a
-//!   prototype or from a definition in the same file; a variadic function needs at
-//!   least its named parameters. A call to a name that was never declared is left
-//!   alone, because C89 permits it and programs written before `#include` worked rely
-//!   on that.
+//! - A variable that no declaration introduces.
+//! - A dereference of a value that is not a pointer.
+//! - An index of a value that is not a pointer or an array.
+//! - An assignment to something that is not an lvalue. An lvalue is a variable, a
+//!   dereference, or an index. The parser accepts any expression to the left of `=`,
+//!   and this stage rejects the invalid ones.
+//! - A call with the wrong number of arguments. The signature comes from a prototype
+//!   or from a definition in the same file. A variadic function needs at least its
+//!   named parameters. A call to a name with no declaration is legal, because C89
+//!   permits it, and programs written before `#include` worked depend on it.
 //!
-//! # Scoping
+//! # Scope
 //!
-//! The scope is a single flat `HashMap<String, Type>` for the whole function. Block-level
-//! scope is not implemented, so a variable declared inside an `if` or a loop body remains
-//! visible after that block ends, and an inner declaration shadowing an outer one will
-//! overwrite it instead. Adding real scoping means replacing this map with a stack of
-//! maps and pushing a frame per block.
+//! One flat `HashMap<String, Type>` holds the scope of a whole function. Block-level
+//! scope does not exist yet. A variable declared inside an `if` or a loop body stays
+//! visible after that block, and an inner declaration overwrites an outer one of the
+//! same name. To add real scope, replace this map with a stack of maps and push a frame
+//! for each block.
 
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
@@ -186,6 +185,18 @@ fn check_expr(
         Expr::Cast(t, inner) => {
             check_expr(inner, scope, sigs)?;
             t.clone()
+        }
+        Expr::PostIncDec(op, inner) => {
+            check_expr(inner, scope, sigs)?;
+            if !is_lvalue(&inner.node) {
+                return Err(CompileError::new(
+                    format!("cannot apply `{}` to this expression", op.describe()),
+                    span,
+                )
+                .with_label("not an lvalue"));
+            }
+            // `x++` has the type of `x`, and yields the value it held before.
+            inner.ty.clone()
         }
         Expr::Assign(lval, rhs) => {
             check_expr(lval, scope, sigs)?;

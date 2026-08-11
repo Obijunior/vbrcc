@@ -1,23 +1,22 @@
 //! The abstract syntax tree and the type system.
 //!
-//! These are the data structures every stage after the parser operates on.
-//! [`Program`] holds a list of [`Function`]s and a list of [`FuncDecl`]s — the
-//! prototypes, which have no body. A function body is a list of [`Stmt`]; statements
-//! contain [`Expr`] trees. Expressions are wrapped in [`TypedExpr`], which pairs an
-//! expression with its [`Span`] and its [`Type`].
+//! Every stage after the parser works on these structures. [`Program`] holds a list of
+//! [`Function`] values and a list of [`FuncDecl`] values, which are the prototypes. A
+//! function body is a list of [`Stmt`], and a statement holds [`Expr`] trees. Each
+//! expression sits in a [`TypedExpr`], which adds a [`Span`] and a [`Type`].
 //!
-//! Prototypes are kept out of `functions` on purpose. [`crate::codegen`] emits a label
-//! and a frame for everything in that list, and a prototype must emit nothing — its
-//! symbol comes from the C runtime.
+//! `Program` keeps prototypes out of `functions` on purpose. [`crate::codegen`] emits a
+//! label and a frame for each entry in `functions`, and a prototype must emit nothing.
+//! Its symbol comes from the C runtime.
 //!
-//! The `ty` field starts as [`Type::Unknown`] when the parser builds the tree, and is
-//! filled in by [`crate::typeck`]. By the time [`crate::codegen`] sees the tree, every
-//! expression has a real type, which lets the code generator scale pointer
-//! arithmetic and decide when an array decays.
+//! The parser sets every `ty` field to [`Type::Unknown`], and [`crate::typeck`] fills
+//! it in. By the time [`crate::codegen`] reads the tree, every expression has a real
+//! type. The code generator uses that type to scale pointer arithmetic and to decide
+//! when an array decays.
 //!
 //! # Type sizes
 //!
-//! [`Type::size`] and [`Type::align`] are the **single** place type widths are decided.
+//! [`Type::size`] and [`Type::align`] are the **one** place that decides type widths.
 
 use crate::diagnostic::{Span, Spanned};
 
@@ -107,6 +106,23 @@ pub enum Expr {
     Deref(Box<TypedExpr>),                  // *expr
     Index(Box<TypedExpr>, Box<TypedExpr>),  // base[idx]
     Cast(Type, Box<TypedExpr>),             // (T)expr
+    PostIncDec(IncDec, Box<TypedExpr>),     // expr++ or expr--
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IncDec {
+    Inc, // ++
+    Dec, // --
+}
+
+impl IncDec {
+    /// The operator as it appears in source, for diagnostics.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            IncDec::Inc => "++",
+            IncDec::Dec => "--",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

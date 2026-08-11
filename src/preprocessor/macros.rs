@@ -99,13 +99,13 @@ impl MacroTable {
     }
 }
 
-/// Replace parameter names in `body` with the corresponding argument tokens.
+/// Replace each parameter name in `body` with the matching argument tokens.
 ///
-/// Every token in the result carries `use_site`, so a diagnostic inside an
-/// expansion points at the call rather than at the `#define`.
+/// Every token in the result carries `use_site`, so a diagnostic inside an expansion
+/// points at the call and not at the `#define`.
 ///
-/// Arguments are substituted **unexpanded**; the caller rescans the whole result,
-/// which expands them in place.
+/// This function substitutes the arguments **unexpanded**. The caller expands each
+/// argument first, and then rescans the whole result.
 pub fn substitute(
     params: &[String],
     args: &[Vec<SpannedToken>],

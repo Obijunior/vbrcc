@@ -1,53 +1,51 @@
-//! The assembler: Intel-syntax assembly text in, machine code and object files out.
+//! The assembler: Intel-syntax text in, machine bytes and object files out.
 //!
-//! This is the back half of the compiler. Here it takes the assembly text produced by [`crate::codegen`] and turns it
-//! into executable bytes.
+//! This is the back half of the compiler. It reads the assembly text that
+//! [`crate::codegen`] produces and turns it into executable bytes.
 //!
 //! # Layers
 //!
-//! Assembly happens in two passes over three layers:
+//! 1. [`instruction`] parses one line of text into an [`instruction::AsmLine`]: an
+//!    instruction, a label, a section change, a directive, or raw data.
+//! 2. [`encoder`] turns each [`instruction::Instruction`] into bytes.
+//! 3. [`pe`] or [`coff`] puts the finished bytes into a container.
 //!
-//! 1. [`instruction`] parses one line of Intel-syntax text into an
-//!    [`instruction::AsmLine`]: an instruction, a label, a section change, a
-//!    directive, or raw data.
-//! 2. [`encoder`] turns each [`instruction::Instruction`] into raw bytes. It exposes
-//!    both `encode` and a separate length calculation, because the assembler must know
-//!    every instruction's size *before* it can resolve a forward jump or call target.
-//!    That is the reason for the two-pass design: pass one measures and assigns
-//!    addresses to labels, pass two encodes with those addresses known.
-//! 3. [`pe`] or [`coff`] wraps the finished bytes in a container.
+//! [`register`] holds the register enums. [`relocation`] holds the relocation and
+//! symbol types that both containers use.
 //!
-//! [`register`] holds the register enums and the bit-field helpers they need;
-//! [`relocation`] holds the relocation and symbol types shared by both containers.
+//! # Why there are two passes
+//!
+//! A jump or a call needs the address of its target, and that target can come later in
+//! the file. Pass one measures every instruction and gives each label an address. Pass
+//! two encodes the instructions with those addresses. This is why [`encoder`] reports
+//! the length of an instruction separately from its bytes.
 //!
 //! # Output formats
 //!
-//! - [`pe`] writes a complete, runnable Windows PE32+ executable. This is the default
-//!   and needs no external tooling. It also emits an Import Address Table for external
-//!   calls such as `printf`, but that path is unfinished: such images build without
-//!   complaint and then fail to start. Prefer [`coff`] plus `lld-link` for programs
-//!   that call into the C runtime.
-//! - [`coff`] writes a relocatable COFF object with a symbol table and
-//!   `IMAGE_REL_AMD64_REL32` relocations, intended to be handed to `lld-link`.
+//! - [`pe`] writes a runnable Windows PE32+ executable. This is the default, and it
+//!   needs no external tool. Its import table covers one DLL, `msvcrt.dll`, so a libc
+//!   call such as `printf` resolves and runs. A program that imports from a second DLL
+//!   needs `lld-link`.
+//! - [`coff`] writes a relocatable object with a symbol table and
+//!   `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to read.
 //!
 //! # Supported subset
 //!
-//! Only the instructions the code generator emits are implemented. That is roughly:
-//! `mov`, `movzx`, `lea`, `push`, `pop`, `add`, `sub`, `imul`, `idiv`, `neg`,
-//! `not`, `and`, `xor`, `cmp`, `cqo`, the `set<cc>` family, the `j<cc>` family, `jmp`,
-//! `call`, `ret`, and `syscall`. Operands are 64-bit general-purpose registers,
-//! 8-bit sub-registers (`al`, `bl`, `cl`, `dl`), immediates, and
-//! `[base + disp]` / `[rip + label]` memory references.
+//! The assembler accepts only the instructions the code generator emits: `mov`,
+//! `movzx`, `movsx`, `movsxd`, `lea`, `push`, `pop`, `add`, `sub`, `imul`, `idiv`,
+//! `neg`, `not`, `and`, `xor`, `cmp`, `cqo`, `ret`, `syscall`, the `set<cc>` family,
+//! the `j<cc>` family, `jmp`, and `call`. An operand is a 64-bit register, an 8-bit
+//! sub-register (`al`, `bl`, `cl`, `dl`), an immediate, or a memory reference of the
+//! form `[base + disp]` or `[rip + label]`.
 //!
-//! Adding an instruction means touching three places in order: a variant in
-//! [`instruction::Instruction`], a match arm in the line parser, and arms in both the
-//! length and encode functions in [`encoder`]. `docs/architecture.md` has the full
-//! recipe.
+//! To add an instruction, change three places in this order: a variant in
+//! [`instruction::Instruction`], a match arm in the line parser, and an arm in each of
+//! the length function and the encode function in [`encoder`]. `docs/architecture.md`
+//! gives the full recipe.
 //!
 //! # References
 //!
-//! The encoding rules implemented here (REX prefixes, ModR/M and SIB bytes,
-//! displacement sizing) come from the *Intel 64 and IA-32 Architectures Software
+//! The encoding rules come from the *Intel 64 and IA-32 Architectures Software
 //! Developer's Manual*, Volume 2. The container layouts come from Microsoft's
 //! *PE Format* specification.
 

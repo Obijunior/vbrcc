@@ -1,17 +1,17 @@
-//! x86-64 register definitions and their encoding bits.
+//! The x86-64 registers and their encoding bits.
 //!
-//! Register numbering on x86-64 follows neither alphabetical nor intuitive order. The classic
-//! eight registers keep their historical 8086 numbering (`rax`=0, `rcx`=1, `rdx`=2,
-//! `rbx`=3, `rsp`=4, `rbp`=5, `rsi`=6, `rdi`=7), with `r8`–`r15` following as 8–15.
-//! The `id` mapping here encodes exactly that.
+//! Register numbers on x86-64 are neither alphabetical nor intuitive. The first eight
+//! registers keep their 8086 numbers: `rax` is 0, `rcx` is 1, `rdx` is 2, `rbx` is 3,
+//! `rsp` is 4, `rbp` is 5, `rsi` is 6, and `rdi` is 7. Then `r8` to `r15` take 8 to 15.
+//! The `id` method returns exactly those numbers.
 //!
-//! Because instruction fields hold only three bits, each register splits in two: `low3`
-//! gives the bits that go into the ModR/M or opcode field, and `ext` reports whether the
-//! fourth bit is set, which the caller must fold into a REX prefix. Callers in
-//! [`super::encoder`] always need both halves.
+//! An instruction field holds only three bits, so each register splits in two. `low3`
+//! gives the bits for the ModR/M field or the opcode field. `ext` reports the fourth
+//! bit, which the caller puts into a REX prefix. Callers in [`super::encoder`] need
+//! both parts.
 //!
-//! [`Register8`] covers only `al`, `bl`, `cl` and `dl`, the sub-registers the code
-//! generator uses for `set<cc>` results before widening them with `movzx`.
+//! [`Register8`] covers only `al`, `bl`, `cl`, and `dl`. The code generator uses these
+//! for a `set<cc>` result, and then widens the result with `movzx`.
 
 #[derive(Debug, Clone, Copy)]
 pub enum Register64 {

@@ -1,28 +1,27 @@
-//! Stage 2: turning the token stream into an abstract syntax tree.
+//! Stage 2: the parser.
 //!
-//! [`Parser::parse_program`] consumes the tokens the preprocessor produced and builds a
-//! [`crate::ast::Program`]: a list of function definitions, each with typed parameters,
-//! a return type and a body, plus a list of prototypes — declarations with no body,
-//! which a header supplies.
+//! [`Parser::parse_program`] reads the tokens from the preprocessor and builds a
+//! [`crate::ast::Program`]. A program holds a list of function definitions and a list
+//! of prototypes. A definition has typed parameters, a return type, and a body. A
+//! prototype has no body, and a header supplies it.
 //!
-//! A definition and a prototype share a head, so one method parses both and the token
-//! after the parameter list decides which it was: `;` makes a prototype, `{` makes a
-//! definition.
+//! A definition and a prototype start the same way, so one method parses both. The
+//! token after the parameter list decides which it is: `;` makes a prototype, and `{`
+//! makes a definition.
 //!
-//! The parser is recursive descent: one method per grammar rule, with expressions
-//! handled by precedence climbing, where each level calls the next-higher-precedence
-//! level and combines results as it unwinds.
+//! The parser is recursive descent, with one method for each grammar rule. It parses
+//! expressions by precedence climbing: each level calls the level above it and combines
+//! the results as it returns.
 //!
 //! # What this stage does not do
 //!
-//! The parser checks *shape*, not *meaning*. It accepts an assignment whose left-hand
-//! side could never be an lvalue; rejecting that is [`crate::typeck`]'s job. This split
-//! lets type errors carry useful messages instead of surfacing as syntax errors.
+//! The parser checks shape, not meaning. It accepts an assignment whose left side can
+//! never be an lvalue, and [`crate::typeck`] rejects it later. This split lets a type
+//! error carry a useful message instead of appearing as a syntax error.
 //!
-//! Accordingly, every expression is wrapped in a `TypedExpr` whose type field is
-//! initialised to `Type::Unknown`. The type checker fills those in later by mutating the
-//! tree in place. Statements are wrapped in `Spanned<Stmt>` to preserve source locations
-//! for diagnostics.
+//! Every expression therefore goes into a `TypedExpr` with the type `Type::Unknown`.
+//! The type checker fills the type in later. Every statement goes into a
+//! `Spanned<Stmt>`, which keeps the source location for diagnostics.
 
 use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
@@ -293,12 +292,10 @@ impl Parser {
 
         // postfix ++ / --
         if self.current() == &Token::PlusPlus || self.current() == &Token::MinusMinus {
-            let op = if self.current() == &Token::PlusPlus { BinaryOp::Add } else { BinaryOp::Sub };
+            let op = if self.current() == &Token::PlusPlus { IncDec::Inc } else { IncDec::Dec };
             self.advance();
             let span = start_span.to(self.previous_span());
-            let one = TypedExpr::new(Expr::IntLiteral(1), span);
-            let combined = TypedExpr::new(Expr::BinaryOp(op, Box::new(lhs.clone()), Box::new(one)), span);
-            return Ok(TypedExpr::new(Expr::Assign(Box::new(lhs), Box::new(combined)), span));
+            return Ok(TypedExpr::new(Expr::PostIncDec(op, Box::new(lhs)), span));
         }
 
         let assign_op = match self.current() {
@@ -749,17 +746,27 @@ mod tests {
 
     #[test]
     fn parse_post_increment() {
+        // Not desugared to `i = i + 1`: that form evaluates to the *new* value,
+        // so `x = i++` would be off by one. See `Expr::PostIncDec`.
         let mut p = parser(vec![
             Token::Ident("i".into()), Token::PlusPlus, Token::Semicolon, Token::EOF,
         ]);
         let stmt = p.parse_statement().unwrap();
-        assert_eq!(stmt, s(Stmt::Expr(e(Expr::Assign(
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::PostIncDec(
+            IncDec::Inc,
             Box::new(e(Expr::Var("i".into()))),
-            Box::new(e(Expr::BinaryOp(
-                BinaryOp::Add,
-                Box::new(e(Expr::Var("i".into()))),
-                Box::new(e(Expr::IntLiteral(1))),
-            ))),
+        )))));
+    }
+
+    #[test]
+    fn parse_post_decrement() {
+        let mut p = parser(vec![
+            Token::Ident("i".into()), Token::MinusMinus, Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::Expr(e(Expr::PostIncDec(
+            IncDec::Dec,
+            Box::new(e(Expr::Var("i".into()))),
         )))));
     }
 

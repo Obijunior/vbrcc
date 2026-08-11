@@ -21,7 +21,10 @@ stage. `src/main.rs` runs the stages in order.
 C source
    │
    ▼
- Lexer          →  tokens (each token has a span)
+ Preprocessor   →  resolves directives, expands macros; drives the lexer
+   │                (reads other files into a SourceMap)
+   ▼
+ tokens (each token has a span tagged with the file it came from)
    │
    ▼
  Parser         →  AST (a Program of functions)
@@ -39,26 +42,61 @@ C source
 If a stage finds an error, the compiler prints a diagnostic and stops. The
 compiler stops at the first error. It does not report more than one error.
 
-## Stage 1 — Lexer
+## Stage 1 — Preprocessor
+
+**Directory:** `src/preprocessor/`
+
+The preprocessor owns the read loop. It reads one logical line at a time. It
+handles a line that starts with `#` as a directive. It gives every other line to
+the lexer. Its output is the token stream that the parser reads.
+
+The lexer is **not** a stage of its own. It is a service that the preprocessor
+calls, one line at a time. This order is important. It lets a dead `#if` branch
+hold text that does not lex, because the preprocessor skips the line first.
+
+| File | Responsibility |
+|---|---|
+| `mod.rs` | The line loop, the directives, the conditional stack, the include stack |
+| `normalize.rs` | Changes comments and `\`-newline pairs to spaces |
+| `macros.rs` | The macro table and parameter substitution |
+| `include.rs` | The `#include` search path and the bundled headers |
+| `cond_expr.rs` | The `#if` constant-expression evaluator |
+
+The `normalize` function keeps the length of the text. A comment becomes spaces.
+It does not disappear. An offset into the new buffer is therefore also an offset
+into the original file. This is why a span from a header points at the correct
+text, and why the compiler needs no offset arithmetic.
+
+An `#include` pushes a new file onto a stack. The line loop always reads from the
+top of the stack. It pops a file when that file ends. Nesting needs no special
+case.
+
+### The lexer
 
 **File:** `src/lexer.rs`
 
-The lexer reads the source text. It makes a list of tokens. A token is one word
-or one symbol of the language. A token is a keyword, an identifier, a number, a
-string, or an operator.
+The lexer turns source text into tokens. A token is one word or one symbol of the
+language. A token is a keyword, an identifier, a number, a string, or an operator.
 
-Each token has a span. A span records the start position and the end position of
-the token in the source text. The compiler uses the span later. It uses the span
-to show the location of an error.
+Each token has a span. A span records the start position, the end position, and
+the **file** of the token. The `Span.file` field indexes a `SourceMap`. The
+`SourceMap` holds every file the compiler has read. The compiler uses the span
+later to show the location of an error in the correct file.
 
-The `tokenize` method returns a `Vec<SpannedToken>`. A `SpannedToken` holds a
-`Token` value and its `Span`. The `Token` enum lists all token kinds. The
-`tokenize` method returns a `Result`. If the lexer finds an unknown character, it
-returns a `CompileError` with the position of the character.
+The `Lexer::for_region(text, file, start, end)` method reads one window of a file.
+It writes that file id into each span. The `position` field stays an absolute
+index into the whole file, so each span is already in file coordinates. The
+`tokenize_region` method does not add a `Token::EOF`. The preprocessor adds one
+`EOF` at the end of the last file.
 
-Note: the lexer emits `Token::Assign` for `=` and `Token::Equals` for `==`. These
-are different tokens. The parser needs this difference to tell an assignment from
-an equality test.
+Two notes:
+
+- The lexer emits `Token::Assign` for `=` and `Token::Equals` for `==`. These are
+  different tokens. The parser needs the difference to tell an assignment from an
+  equality test.
+- A `#` that reaches the lexer is an error. The preprocessor consumes every
+  directive line first. A `#` here is a stray one in the middle of a line, or a
+  preprocessor bug.
 
 ## Stage 2 — Parser
 
@@ -127,14 +165,22 @@ scale pointer arithmetic and to decay an array to a pointer.
 The code generator follows these rules:
 
 - A result always goes into `rax`.
-- For a binary operation, the generator evaluates the left side first. It pushes
-  the result. It evaluates the right side. It pops the left side back. The left
-  side goes to `rax`. The right side goes to `rcx`. Then the generator emits the
+- The stack pointer `rsp` does not move after the prologue. To keep an
+  intermediate value, the generator saves it to a frame slot with `spill_rax`. It
+  does not use `push`.
+- For a binary operation, the generator evaluates the left side first and saves
+  the result to a frame slot. It evaluates the right side into `rax`. It moves the
+  right side to `rcx` and loads the left side back into `rax`. Then it emits the
   operation.
 - The generator stores a variable on the stack. It uses a negative offset from
   `rbp`. The `variables` map holds the offset for each name.
 - The generator uses numbered labels for control flow, for example `loop_0_start`
   and `if_0_end`.
+
+The rule about `push` is a correctness rule, not a style rule. A callee measures
+its 32 bytes of shadow space from `rsp`. A `push` moves `rsp` down by 8, so the
+next call writes over the value that the `push` saved. A `push` also breaks the
+16-byte stack alignment that Win64 requires at a `call`.
 
 The generator has two expression methods:
 
@@ -165,10 +211,11 @@ The assembler supports two output formats:
   table, and an import table. The assembler resolves an external call, for example
   `printf`, through the Import Address Table.
 
-  Note: the import path is not finished. A program with no external calls builds and
-  runs correctly. A program that calls `printf` also builds, and the compiler reports
-  success, but the resulting image fails to load (exit code 127). Use the `--lld-link`
-  mode for such programs until this is fixed.
+  Note: the import table covers one DLL. The `build_import_section` function in
+  `assembler/mod.rs` uses the fixed name `msvcrt.dll`. A libc call such as
+  `printf` therefore runs through the default backend with no external linker. A
+  call into `kernel32`, `user32`, or the UCRT does not resolve. Use `--lld-link`
+  for a program that imports from more than one DLL.
 - **A COFF object** (`coff.rs`, for the `--lld-link` path). The assembler writes a
   relocatable object file. The file has a symbol table and relocations. The linker
   `lld-link` resolves the relocations.
@@ -209,6 +256,7 @@ key. In a test, check `err.span.start` and `err.span.end`. Do not use
 | File | Responsibility |
 |---|---|
 | `src/main.rs` | Parses the CLI flags. Runs the pipeline stages. |
+| `src/preprocessor/` | Owns the read loop. Handles directives, macros, and `#include`. Calls the lexer. |
 | `src/lexer.rs` | Turns source text into tokens with spans. |
 | `src/parser.rs` | Turns tokens into the AST. |
 | `src/ast.rs` | Holds the AST enums and the `Type` enum. |

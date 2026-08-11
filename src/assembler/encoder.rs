@@ -1,32 +1,29 @@
-//! Encoding [`Instruction`] values into x86-64 machine bytes.
+//! The instruction encoder: [`Instruction`] values in, machine bytes out.
 //!
-//! This module implements the instruction-encoding rules from the *Intel 64 and IA-32
-//! Architectures Software Developer's Manual*, Volume 2. An x86-64 instruction is
-//! assembled from optional prefixes, an opcode, and optional ModR/M, SIB, displacement
-//! and immediate fields; the helpers here build each piece.
+//! The rules here come from the *Intel 64 and IA-32 Architectures Software Developer's
+//! Manual*, Volume 2. An x86-64 instruction has optional prefixes, an opcode, and
+//! optional ModR/M, SIB, displacement, and immediate fields. The helpers below build
+//! each piece.
 //!
 //! # Three complications
 //!
-//! The mnemonic alone does not tell you how to encode an instruction. Three details
-//! drive most of the complexity here:
+//! The mnemonic alone does not tell you how to encode an instruction.
 //!
-//! - **REX prefix.** 64-bit operand size and access to registers `r8`–`r15` both
-//!   require a REX byte. Its `W`, `R`, `X` and `B` bits extend the operand size and the
-//!   three-bit register fields, which is why [`super::register::Register64`] exposes
-//!   `low3` and `ext` separately. The low three bits go in ModR/M, the fourth goes in
-//!   REX.
-//! - **Displacement sizing.** `[base + disp]` chooses a 0-, 1-, or 4-byte displacement
-//!   depending on magnitude. Two registers break the pattern: `rbp`/`r13` (low bits
-//!   `101`) cannot use the zero-displacement form and always need at least one
-//!   displacement byte, and `rsp`/`r12` (low bits `100`) always require an extra SIB
-//!   byte because that encoding is reserved as the SIB escape.
-//! - **Two-pass assembly.** Jump and call targets are relative, so their offsets cannot
-//!   be computed until every label's address is known. `encoded_len` therefore reports
-//!   an instruction's size without encoding it, letting the assembler lay out addresses
-//!   in a first pass before emitting bytes in a second.
+//! - **The REX prefix.** A 64-bit operand needs a REX byte, and so does any use of
+//!   `r8` to `r15`. The `W`, `R`, `X`, and `B` bits of that byte extend the operand
+//!   size and the three-bit register fields. This is why
+//!   [`super::register::Register64`] has both `low3` and `ext`: the low three bits go
+//!   in ModR/M, and the fourth bit goes in REX.
+//! - **Displacement size.** `[base + disp]` uses a displacement of 0, 1, or 4 bytes,
+//!   by magnitude. Two registers are exceptions. `rbp` and `r13` (low bits `101`)
+//!   always need at least one displacement byte. `rsp` and `r12` (low bits `100`)
+//!   always need an extra SIB byte, because that encoding is the SIB escape.
+//! - **Two passes.** A jump or call offset is relative, so the encoder cannot compute
+//!   it until every label has an address. [`encoded_len`] therefore reports the size of
+//!   an instruction without encoding it.
 //!
-//! Calls to symbols defined outside the current unit emit a [`Relocation`] instead of a
-//! final offset, to be patched by the container writer or an external linker.
+//! A call to a symbol from outside this unit emits a [`Relocation`] in place of a final
+//! offset. The container writer or an external linker then patches it.
 
 use super::instruction::{Instruction, Section};
 use super::relocation::{Relocation, RelocationType};

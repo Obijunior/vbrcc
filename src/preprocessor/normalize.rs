@@ -1,8 +1,11 @@
-/// Blank comments and backslash-newline pairs to spaces.
+/// Replace each comment and each backslash-newline pair with spaces.
 ///
-/// The result has exactly as many chars as the input, so offsets into it are
-/// offsets into the original file. Newlines inside block comments are preserved
-/// so line structure and directive detection is unaffected.
+/// The result has the same number of characters as the input, so an offset into the
+/// result is also an offset into the original file. This is why a span from a header
+/// needs no offset arithmetic.
+///
+/// A newline inside a block comment stays a newline, so the line structure does not
+/// change and the caller still finds every directive.
 pub fn normalize(text: &str) -> Vec<char> {
     let src: Vec<char> = text.chars().collect();
     let mut out = Vec::with_capacity(src.len());

@@ -1,17 +1,17 @@
-//! The `#if` and `#elif` constant-expression evaluator.
+//! The constant-expression evaluator for `#if` and `#elif`.
 //!
-//! The caller resolves `defined` and expands macros first, so this sees only
-//! literals, operators, parentheses, and identifiers. C says an identifier that
-//! is not a macro evaluates to `0`, which is why an undefined name is not an
-//! error here.
+//! The caller resolves `defined` and expands the macros first. This module therefore
+//! sees only literals, operators, parentheses, and identifiers. C gives an identifier
+//! that is not a macro the value `0`, so an unknown name is not an error here.
 //!
-//! Arithmetic is `i64` throughout. C99 requires the widest integer type, and
-//! `long` is 64 bits on this target.
+//! All arithmetic uses `i64`. C99 asks for the widest integer type, and `long` is 64
+//! bits on this target.
 //!
 //! # Limits
 //!
-//! Bitwise `&`, `|`, `^`, the shifts, and `?:` are missing. So is the comma
-//! operator. Adding them is one row each in `binding_power` and `Eval::apply`.
+//! The bitwise operators `&`, `|`, and `^`, the shifts, `?:`, and the comma operator
+//! are all missing. To add one, add a row to `binding_power` and an arm to
+//! `Eval::apply`.
 
 use crate::diagnostic::{CompileError, Span};
 use crate::lexer::{SpannedToken, Token};

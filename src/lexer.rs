@@ -1,28 +1,25 @@
-//! Turning C source text into a token stream.
+//! Source text in, tokens out.
 //!
-//! [`Lexer::tokenize`] scans the source once and returns a `Vec<SpannedToken>`, or a
-//! [`CompileError`] pointing at the first character it could not recognise.
+//! [`Lexer::tokenize`] reads the source once. It returns a `Vec<SpannedToken>`, or a
+//! [`CompileError`] that points at the first character it does not recognise.
 //!
-//! Every token carries a [`Span`] recording where it began and ended in the original
-//! text. Spans are threaded through the parser and type checker untouched so that an
-//! error discovered several stages later can still be reported against the exact source
-//! it came from.
+//! Every token carries a [`Span`]. The span records the file, the start, and the end of
+//! the token. The parser and the type checker pass spans through unchanged, so a stage
+//! much later can still report an error against the exact source it came from.
 //!
 //! # Quirks
 //!
-//! - `=` and `==` produce distinct tokens (`Token::Assign` and `Token::Equals`). The
-//!   parser depends on that distinction to tell an assignment from an equality test, and
-//!   collapsing them produces confusing downstream errors.
-//! - A `#` reaching the lexer is a **hard error**. Directive lines are consumed by
-//!   [`crate::preprocessor`] before the lexer ever sees them, so a stray `#` means
-//!   either a `#` in the middle of a line or a preprocessor bug.
-//! - The lexer is not a stage of its own. The preprocessor owns the read loop and calls
-//!   [`Lexer::for_region`] / [`Lexer::retarget`] to tokenize one logical line at a
-//!   time. [`Lexer::new`] still tokenizes a whole string as file 0, which is what
-//!   the tests use.
-//! - [`Lexer::tokenize`] appends `Token::EOF`; [`Lexer::tokenize_region`] does not.
-//!   The preprocessor needs the latter, since one `EOF` per line would end the
-//!   parse early.
+//! - `=` and `==` produce different tokens: `Token::Assign` and `Token::Equals`. The
+//!   parser needs the difference to tell an assignment from an equality test.
+//! - A `#` that reaches the lexer is an error. [`crate::preprocessor`] consumes every
+//!   directive line first, so a `#` here is either a stray one in the middle of a line
+//!   or a preprocessor bug.
+//! - The lexer is not a stage of its own. The preprocessor owns the read loop. It calls
+//!   [`Lexer::for_region`] and [`Lexer::retarget`] to read one logical line at a time.
+//!   [`Lexer::new`] still reads a whole string as file 0, which is what the tests use.
+//! - [`Lexer::tokenize`] adds `Token::EOF` at the end. [`Lexer::tokenize_region`] does
+//!   not. The preprocessor needs the second form, because one `EOF` for each line would
+//!   end the parse early.
 
 use crate::diagnostic::{CompileError, Span, FileId};
 

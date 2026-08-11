@@ -1,47 +1,30 @@
-//! Stage 4: emitting Intel-syntax x86-64 assembly from the typed AST.
+//! Stage 4: the code generator.
 //!
-//! [`Codegen::generate`] walks the type-annotated tree and returns assembly text. It
-//! reads the `ty` field on each expression to scale pointer arithmetic correctly and to
-//! decide when an array decays to a pointer, so it must run after [`crate::typeck`].
+//! [`Codegen::generate`] walks the typed AST and returns Intel-syntax x86-64 assembly.
+//! It reads the `ty` field of each expression to scale pointer arithmetic and to decay
+//! arrays, so it must run after [`crate::typeck`].
 //!
-//! # Register and stack discipline
+//! # Rules
 //!
-//! The conventions below hold throughout. If you add a code path that breaks one, the
-//! compiler will still produce assembly, and that assembly will be wrong.
+//! Break one of these rules and the compiler still emits assembly. The assembly is
+//! wrong.
 //!
-//! - **Every expression leaves its result in `rax`.**
-//! - **Binary operations spill through the stack.** The left operand is evaluated and
-//!   pushed, the right operand is evaluated, the left is popped back into `rax` and the
-//!   right ends up in `rcx`, then the operation is emitted. This is inefficient, since a
-//!   register allocator would avoid most of it, but it is uniform and composes to
-//!   arbitrary expression depth without running out of registers.
-//! - **Call arguments are staged in frame slots, never materialised into their
-//!   registers early.** Every argument is evaluated into its own `[rbp - n]` slot
-//!   first; only once all of them are evaluated are `rcx`/`rdx`/`r8`/`r9` loaded,
-//!   immediately before the `call`. This is not an optimisation detail — it is
-//!   required for correctness, because the point above means evaluating *any*
-//!   expression clobbers `rcx`, and a nested call clobbers every volatile register
-//!   plus its own 32-byte shadow space. Loading a register and then running more
-//!   code before the `call` silently corrupts that argument. Frame slots sit above
-//!   the shadow space, so neither hazard reaches them.
-//! - **Locals live on the stack** at negative offsets from `rbp`, tracked by the
-//!   `variables` map. Argument staging slots come from the same counter and are
-//!   never reused, so a function with many call sites reserves 8 bytes per argument
-//!   per site. Correct but not compact; a high-water-mark scheme would reclaim it.
-//! - **Labels are numbered**, producing names like `loop_0_start` and `if_0_end`, so
-//!   nested control flow cannot collide.
+//! - Every expression puts its result in `rax`.
+//! - `rsp` does not move after the prologue. Intermediate values go into frame slots
+//!   through `spill_rax`, never through `push`. See that method for the reason.
+//! - Call arguments go into frame slots first. The generator loads `rcx`, `rdx`, `r8`,
+//!   and `r9` immediately before the `call`, because any expression it evaluates in
+//!   between overwrites `rcx`.
+//! - Locals live at negative offsets from `rbp`. The `variables` map holds each offset.
+//!   Slots are never reused, so a function reserves 8 bytes for each spill site.
+//! - Every label carries a number, such as `loop_0_start`. Nested control flow cannot
+//!   collide.
 //!
-//! # Values versus addresses
+//! # Values and addresses
 //!
-//! Two methods carry the expression logic. Pick the wrong one and you store to the
-//! address of a value, or dereference an address you meant to keep:
-//!
-//! - `gen_expr` computes the **value** of an expression into `rax`.
-//! - `gen_lvalue_addr` computes the **address** of an lvalue into `rax`. It is used for
-//!   `&x`, for stores through a pointer, and for indexing.
-//!
-//! String literals are collected into a data section as they are encountered and
-//! referenced by RIP-relative `lea`.
+//! `gen_expr` puts the **value** of an expression in `rax`. `gen_lvalue_addr` puts the
+//! **address** of an lvalue in `rax`. Use the second one for `&x`, for a store through
+//! a pointer, and for an index.
 
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
@@ -89,6 +72,24 @@ impl Codegen {
             4 => self.emit(&format!("  mov dword ptr {}, {}", addr, src)),
             _ => self.emit(&format!("  mov {}, {}", addr, src)),
         }
+    }
+
+    /// Save `rax` into a new frame slot. Returns the offset of the slot from `rbp`.
+    ///
+    /// This must not use `push`. A callee measures its 32 bytes of shadow space from
+    /// `rsp`, so a `push` puts the value where the next call writes. A `push` also
+    /// breaks the 16-byte stack alignment that Win64 requires at a `call`.
+    /// `f(1) + g(2)` returned 4 before frame slots replaced the push.
+    fn spill_rax(&mut self) -> i64 {
+        self.stack_offset -= 8;
+        let slot = self.stack_offset;
+        self.emit(&format!("  mov [rbp - {}], rax", -slot));
+        slot
+    }
+
+    /// Load a previously spilled value back into `reg`.
+    fn reload(&mut self, reg: &str, slot: i64) {
+        self.emit(&format!("  mov {}, [rbp - {}]", reg, -slot));
     }
 
     fn emit_data(&mut self, line: &str) {
@@ -194,21 +195,19 @@ impl Codegen {
                 let id = self.label_count;
                 self.label_count += 1;
 
-                self.gen_statement(init)?; // init
-                self.emit(&format!("loop_{}_start:", id)); // loop header label
+                self.gen_statement(init)?;
+                self.emit(&format!("loop_{}_start:", id));
 
-                // condition
                 self.gen_expr(cond)?;
                 self.emit("  cmp rax, 0");
-                self.emit(&format!("  je loop_{}_end", id)); // exit if condition is false
+                self.emit(&format!("  je loop_{}_end", id));
 
                 for stmt in body {
-                    self.gen_statement(stmt)?; // loop body
+                    self.gen_statement(stmt)?;
                 }
-                self.gen_statement(update)?; // update (e.g. i++)
-                self.emit(&format!("  jmp loop_{}_start", id)); // jump back to loop header
-                self.emit(&format!("loop_{}_end:", id)); // loop exit label
-
+                self.gen_statement(update)?;
+                self.emit(&format!("  jmp loop_{}_start", id));
+                self.emit(&format!("loop_{}_end:", id));
             }
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
@@ -270,7 +269,8 @@ impl Codegen {
         Ok(())
     }
 
-    /// Compute the ADDRESS of an lvalue into rax (as opposed to its value).
+    /// Put the address of an lvalue in rax. Compare `gen_expr`, which puts its value
+    /// there.
     fn gen_lvalue_addr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::Var(name) => {
@@ -286,12 +286,12 @@ impl Codegen {
             }
             Expr::Index(base, idx) => {
                 let elem_size = base.ty.pointee().map(|t| t.size()).unwrap_or(8);
-                self.gen_ptr_base(base)?; // rax = base pointer
-                self.emit("  push rax");
-                self.gen_expr(idx)?; // rax = index
+                self.gen_ptr_base(base)?;
+                let base_slot = self.spill_rax();
+                self.gen_expr(idx)?;
                 self.emit(&format!("  imul rax, {}", elem_size));
                 self.emit("  mov rcx, rax");
-                self.emit("  pop rax");
+                self.reload("rax", base_slot);
                 self.emit("  add rax, rcx");
             }
             _ => {
@@ -315,7 +315,6 @@ impl Codegen {
     fn gen_expr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::IntLiteral(n) => {
-                // Move the literal directly into %rax
                 self.emit(&format!("  mov rax, {}", n));
             }
 
@@ -325,7 +324,7 @@ impl Codegen {
             }
 
             Expr::FunctionCall {name, args} => {
-                // Windows x64 calling convention: RCX, RDX, R8, R9
+                // Win64 passes the first four integer arguments in these registers.
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
                 if args.len() > arg_regs.len() {
                     return Err(CompileError::new(
@@ -334,34 +333,17 @@ impl Codegen {
                     ));
                 }
 
-                // Evaluate every argument into its own frame slot BEFORE loading
-                // any argument register.
-                //
-                // Materialising straight into rcx/rdx/r8/r9 as we walk the list is
-                // wrong twice over. Binary-op codegen uses rcx as a scratch
-                // register, so an expression argument destroyed argument 0 — that
-                // is why `printf("%d\n", a + b)` segfaulted. And a nested call
-                // clobbers every volatile register plus its own shadow space, so
-                // `add(5, g(1))` silently returned the wrong value.
-                //
-                // Frame slots are addressed off rbp and sit above the 32-byte
-                // shadow space, so neither hazard can reach them. The frame is
-                // sized from `stack_offset` after the body is generated, so these
-                // slots are automatically included.
+                // Evaluate every argument into a frame slot before any register load.
                 let mut slots = Vec::with_capacity(args.len());
                 for arg in args.iter() {
                     self.gen_expr(arg)?;
-                    self.stack_offset -= 8;
-                    let slot = self.stack_offset;
-                    self.emit(&format!("  mov [rbp - {}], rax", -slot));
-                    slots.push(slot);
+                    slots.push(self.spill_rax());
                 }
 
-                // Nothing else runs between here and the call, so loading the
-                // registers is now safe.
+                // Nothing runs between here and the call, so the registers are safe.
                 for (i, slot) in slots.iter().enumerate() {
-                    self.emit(&format!("  mov {}, [rbp - {}]", arg_regs[i], -slot));
-                    // Home space for varargs: spill register args into shadow space
+                    self.reload(arg_regs[i], *slot);
+                    // A variadic callee reads its named arguments from shadow space.
                     self.emit(&format!("  mov [rsp + {}], {}", i * 8, arg_regs[i]));
                 }
 
@@ -369,13 +351,11 @@ impl Codegen {
             }
 
             Expr::UnaryOp(op, inner) => {
-                // Evaluate the inner expression first (result in %rax)
                 self.gen_expr(inner)?;
                 match op {
                     UnaryOp::Negate => self.emit("  neg rax"),
                     UnaryOp::BitNot => self.emit("  not rax"),
                     UnaryOp::LogNot => {
-                        // !x: set %rax to 1 if %rax == 0, else 0
                         self.emit("  cmp rax, 0");
                         self.emit("  mov rax, 0");
                         self.emit("  sete al");
@@ -384,10 +364,8 @@ impl Codegen {
             }
 
             Expr::BinaryOp(op, left, right) => {
-                // logical AND and OR short-circuiting
-                // they aren't really binary operations in the same sense as +, -, *, /, etc, so we short circuit them here 
-                // before evaluating the left and right operands
-                
+                // `&&` and `||` must not evaluate the right operand when the left
+                // settles the result, so they branch instead of falling through.
                 if *op == BinaryOp::LogicalAnd {
                     let id = self.label_count;
                     self.label_count += 1;
@@ -420,14 +398,13 @@ impl Codegen {
                     self.emit(&format!("or_{}_end:", id));
                     return Ok(());
                 }
-                // Evaluate left, push to stack
-                // Evaluate right, result in rax
-                // Pop left into rcx, perform op
+                // The operation reads the left operand from rax and the right one
+                // from rcx.
                 self.gen_expr(left)?;
-                self.emit("  push rax");
+                let left_slot = self.spill_rax();
                 self.gen_expr(right)?;
-                self.emit("  mov rcx, rax"); // right operand in rcx
-                self.emit("  pop rax");        // left operand back in rax
+                self.emit("  mov rcx, rax");
+                self.reload("rax", left_slot);
 
                 match op {
                     BinaryOp::Add => {
@@ -443,33 +420,32 @@ impl Codegen {
                         self.emit("  sub rax, rcx")
                     }
                     BinaryOp::Mul => self.emit("  imul rax, rcx"),
+                    // `idiv` divides rdx:rax, so `cqo` must sign-extend rax into rdx
+                    // first. The quotient lands in rax and the remainder in rdx.
                     BinaryOp::Div => {
-                        // idivq divides rdx:rax by the operand
-                        // cqo sign-extends rax into rdx first
                         self.emit("  cqo");
                         self.emit("  idiv rcx");
-                        // quotient is left in rax automatically
                     }
                     BinaryOp::Mod => {
                         self.emit("  cqo");
                         self.emit("  idiv rcx");
-                        // remainder is left in rdx
                         self.emit("  mov rax, rdx");
                     }
+                    // Each comparison sets the low byte of rax, then widens it.
                     BinaryOp::Eq => {
                         self.emit("  cmp rax, rcx");
-                        self.emit("  sete al"); // set low byte to 1 if equal, else 0
-                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                        self.emit("  sete al");
+                        self.emit("  movzx rax, al");
                     }
                     BinaryOp::Neq => {
                         self.emit("  cmp rax, rcx");
-                        self.emit("  setne al"); // set low byte to 1 if not equal, else 0
-                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                        self.emit("  setne al");
+                        self.emit("  movzx rax, al");
                     }
                     BinaryOp::Lt => {
                         self.emit("  cmp rax, rcx");
-                        self.emit("  setl al"); // set low byte to 1 if rax < rcx, else 0
-                        self.emit("  movzx rax, al"); // zero-extend to full 64-bit
+                        self.emit("  setl al");
+                        self.emit("  movzx rax, al");
                     }
                     BinaryOp::Lte => {
                         self.emit("  cmp rax, rcx");
@@ -518,17 +494,41 @@ impl Codegen {
             }
 
             Expr::Cast(_ty, inner) => {
-                // Loose model: no representation change; just evaluate the operand.
+                // A cast does not change the representation yet. Evaluate the operand.
                 self.gen_expr(inner)?;
             }
 
             Expr::Assign(lval, value) => {
-                self.gen_expr(value)?;          // rax = rhs value
-                self.emit("  push rax");
-                self.gen_lvalue_addr(lval)?;    // rax = destination address
-                self.emit("  pop rcx");         // rcx = rhs value
-                self.emit_store("[rax]", "rcx", lval.ty.size());  // store
-                self.emit("  mov rax, rcx");    // assignment evaluates to the stored value
+                self.gen_expr(value)?;
+                let value_slot = self.spill_rax();
+                self.gen_lvalue_addr(lval)?;
+                self.reload("rcx", value_slot);
+                self.emit_store("[rax]", "rcx", lval.ty.size());
+                // An assignment evaluates to the value it stored.
+                self.emit("  mov rax, rcx");
+            }
+
+            Expr::PostIncDec(op, target) => {
+                // `x++` evaluates to the value before the update, so the old value
+                // goes into a slot and comes back last. The address needs a slot too,
+                // because the load overwrites rax and the store needs the address.
+                let width = target.ty.size();
+                // `p++` steps by one element, the same as `p + 1`.
+                let step = target.ty.pointee().map(|t| t.size()).unwrap_or(1);
+
+                self.gen_lvalue_addr(target)?;
+                let addr_slot = self.spill_rax();
+                self.emit_load("[rax]", width);
+                let old_slot = self.spill_rax();
+
+                match op {
+                    IncDec::Inc => self.emit(&format!("  add rax, {}", step)),
+                    IncDec::Dec => self.emit(&format!("  sub rax, {}", step)),
+                }
+                self.emit("  mov rcx, rax");
+                self.reload("rax", addr_slot);
+                self.emit_store("[rax]", "rcx", width);
+                self.reload("rax", old_slot);
             }
         }
         Ok(())
@@ -730,6 +730,37 @@ mod tests {
     fn test_pointer_arithmetic_scales_by_four() {
         let asm = compile("int main() { int a[3]; int *p = a; return *(p + 1); }");
         assert!(asm.contains("imul rcx, 4"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn operands_spill_to_frame_slots_rather_than_pushing() {
+        // `push rax` puts the operand where a nested call writes its shadow space, and
+        // it leaves rsp misaligned at the call. `f(1) + g(2)` returned 4, not 3.
+        let asm = compile(
+            "int f(int x) { return x; } \
+             int g(int x) { return x; } \
+             int main() { return f(1) + g(2); }",
+        );
+        assert!(!asm.contains("push rax"), "operands must spill to frame slots:\n{asm}");
+    }
+
+    #[test]
+    fn assignment_and_indexing_also_avoid_push() {
+        let asm = compile("int main() { int a[3]; int i = 1; a[i] = 7; return a[i]; }");
+        assert!(!asm.contains("push rax"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn post_increment_steps_a_pointer_by_the_pointee_size() {
+        // `p++` must scale like `p + 1`, not add a raw 1.
+        let asm = compile("int main() { int a[3]; int *p = a; p++; return 0; }");
+        assert!(asm.contains("add rax, 4"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn post_increment_steps_a_scalar_by_one() {
+        let asm = compile("int main() { int i = 0; i++; return i; }");
+        assert!(asm.contains("add rax, 1"), "asm:\n{asm}");
     }
 
     #[test]

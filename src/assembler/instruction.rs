@@ -1,19 +1,18 @@
-//! Parsing Intel-syntax assembly text into structured instructions.
+//! The assembler's front end: Intel-syntax text in, structured instructions out.
 //!
-//! This is the assembler's front end. It reads the `.s` text emitted by
-//! [`crate::codegen`] one line at a time and produces an [`AsmLine`] describing what
-//! that line means: an [`Instruction`], a label definition, a section change, a
-//! `.globl` declaration, raw data bytes, or nothing at all (blank lines, comments,
-//! and directives the assembler ignores such as `.intel_syntax noprefix`).
+//! This module reads the `.s` text from [`crate::codegen`] one line at a time. Each
+//! line becomes an [`AsmLine`]: an [`Instruction`], a label, a section change, a
+//! `.globl` declaration, raw data bytes, or nothing. A blank line, a comment, and a
+//! directive the assembler ignores, such as `.intel_syntax noprefix`, all become
+//! nothing.
 //!
-//! [`Instruction`] is deliberately shaped around *addressing modes* rather than
-//! mnemonics: `mov` becomes five distinct variants (`MovRegImm64`, `MovRegReg`,
-//! `MovMemDispReg`, `MovRegMemDisp`, `MovzxReg64Reg8`) because each encodes to a
-//! different opcode and ModR/M layout. Resolving the addressing mode once here means
-//! [`super::encoder`] never has to re-inspect operands to decide how to encode.
+//! [`Instruction`] has one variant for each addressing mode, not one for each mnemonic.
+//! `mov` becomes five variants, because each form encodes to a different opcode and
+//! ModR/M layout. This module resolves the addressing mode once, so [`super::encoder`]
+//! never examines the operands again to decide how to encode them.
 //!
-//! The parser is intentionally narrow. It accepts the forms this compiler emits, not
-//! the full Intel grammar, and rejects anything else rather than guessing.
+//! The parser is narrow on purpose. It accepts the forms this compiler emits, not the
+//! full Intel grammar, and it rejects anything else instead of guessing.
 
 use super::register::{Register64, Register8};
 
