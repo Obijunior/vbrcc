@@ -103,7 +103,7 @@ impl Parser {
     }
 
     fn is_type_start(tok: &Token) -> bool {
-        matches!(tok, Token::Int | Token::Char | Token::Long | Token::Void | Token::Const)
+        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const)
     }
 
     fn parse_block(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
@@ -131,6 +131,7 @@ impl Parser {
         let mut ty = match self.advance().clone() {
             Token::Int => Type::Int,
             Token::Char => Type::Char,
+            Token::Bool => Type::Bool,
             Token::Long => Type::Long,
             Token::Void => Type::Void,
             other => {
@@ -259,7 +260,7 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Stmt::Return(expr)
             }
-            Token::Int | Token::Char | Token::Long | Token::Void | Token::Const => {
+            Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const => {
                 return self.parse_decl();
             }
             Token::For => return self.parse_for(),

@@ -1,8 +1,7 @@
 #ifndef _VBRCC_STDBOOL_H
 #define _VBRCC_STDBOOL_H
 
-/* Macros until _Bool arrives */
-#define bool int
+#define bool _Bool
 #define true 1
 #define false 0
 #define __bool_true_false_are_defined 1

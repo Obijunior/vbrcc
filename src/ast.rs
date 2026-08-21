@@ -24,6 +24,7 @@ use crate::diagnostic::{Span, Spanned};
 pub enum Type {
     Int,
     Char,
+    Bool,
     Long,
     Void,
     Pointer(Box<Type>),
@@ -36,6 +37,7 @@ impl Type {
         match self {
             Type::Char => 1,
             Type::Int => 4,
+            Type::Bool => 1,
             Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
             Type::Unknown => 8,
@@ -46,6 +48,7 @@ impl Type {
         match self {
             Type::Char => 1,
             Type::Int => 4,
+            Type::Bool => 1,
             Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
             Type::Unknown => 8,
@@ -71,6 +74,7 @@ impl Type {
         match self {
             Type::Int => "int".to_string(),
             Type::Char => "char".to_string(),
+            Type::Bool => "_Bool".to_string(),
             Type::Long => "long".to_string(),
             Type::Void => "void".to_string(),
             Type::Pointer(t) => format!("{}*", t.describe()),
@@ -195,6 +199,7 @@ mod tests {
     fn scalar_sizes_are_c_widths() {
         assert_eq!(Type::Int.size(), 4);
         assert_eq!(Type::Char.size(), 1);
+        assert_eq!(Type::Bool.size(), 1);
         assert_eq!(Type::Long.size(), 8);
         assert_eq!(Type::Pointer(Box::new(Type::Int)).size(), 8);
     }
@@ -207,6 +212,7 @@ mod tests {
     #[test]
     fn scalar_align_is_c() {
         assert_eq!(Type::Int.align(), 4);
+        assert_eq!(Type::Bool.align(), 1);
         assert_eq!(Type::Pointer(Box::new(Type::Char)).align(), 8);
     }
 }

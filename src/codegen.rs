@@ -92,6 +92,14 @@ impl Codegen {
         self.emit(&format!("  mov {}, [rbp - {}]", reg, -slot));
     }
 
+    /// Collapse rax to 0 or 1. C99 6.3.1.2: any nonzero value stored through
+    /// a _Bool lvalue becomes exactly 1.
+    fn normalize_bool(&mut self) {
+        self.emit("  cmp rax, 0");
+        self.emit("  setne al");
+        self.emit("  movzx rax, al");
+    }
+
     fn emit_data(&mut self, line: &str) {
         self.data_section.push_str(line);
         self.data_section.push('\n');
@@ -219,6 +227,9 @@ impl Codegen {
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
                     self.gen_expr(expr)?;
+                    if *ty == Type::Bool {
+                        self.normalize_bool();
+                    }
                     let addr = format!("[rbp - {}]", -offset);
                     self.emit_store(&addr, "rax", ty.size());
                 }
@@ -500,6 +511,9 @@ impl Codegen {
 
             Expr::Assign(lval, value) => {
                 self.gen_expr(value)?;
+                if lval.ty == Type::Bool {
+                    self.normalize_bool();
+                }
                 let value_slot = self.spill_rax();
                 self.gen_lvalue_addr(lval)?;
                 self.reload("rcx", value_slot);

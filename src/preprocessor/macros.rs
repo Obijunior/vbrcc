@@ -69,8 +69,6 @@ impl MacroTable {
         for (name, value) in [
             ("__STDC__", 1i64),
             ("__STDC_VERSION__", 199901),
-            // Bundled headers branch on the target; omitting these would make
-            // them lie about the platform we actually emit for.
             ("_WIN32", 1),
             ("_WIN64", 1),
         ] {
