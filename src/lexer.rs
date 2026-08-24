@@ -32,13 +32,14 @@ pub enum Token {
     StringLiteral(String),
     // Register(String), <-- commenting to keep the warnings quiet
     Ident(String),
-    Bool,
-
+    
     // types
     Int,
     Char,
+    Bool,
     Long,
     Void,
+    Typedef,
 
     // keywords
     Return,
@@ -109,6 +110,7 @@ impl Token {
             Token::Char => "`char`".to_string(),
             Token::Long => "`long`".to_string(),
             Token::Void => "`void`".to_string(),
+            Token::Typedef => "`typedef`".to_string(),
             Token::Bool => "`_Bool`".to_string(),
             Token::Return => "`return`".to_string(),
             Token::For => "`for`".to_string(),
@@ -170,6 +172,7 @@ impl Token {
             Token::Long => "long".to_string(),
             Token::Void => "void".to_string(),
             Token::Bool => "_Bool".to_string(),
+            Token::Typedef => "typedef".to_string(),
             Token::Return => "return".to_string(),
             Token::For => "for".to_string(),
             Token::While => "while".to_string(),
@@ -377,6 +380,7 @@ impl Lexer {
             "else" => Token::Else,
             "const" => Token::Const,
             "_Bool" => Token::Bool,
+            "typedef" => Token::Typedef,
             _ => Token::Ident(ident),
         }
     }

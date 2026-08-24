@@ -23,6 +23,8 @@
 //! The type checker fills the type in later. Every statement goes into a
 //! `Spanned<Stmt>`, which keeps the source location for diagnostics.
 
+use std::collections::HashMap;
+
 use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Span, Spanned};
@@ -30,6 +32,7 @@ use crate::diagnostic::{CompileError, Span, Spanned};
 pub struct Parser {
     tokens: Vec<SpannedToken>,
     pos: usize,
+    typedefs: HashMap<String, Type>,
 }
 
 /// What one top-level item turned out to be.
@@ -40,7 +43,7 @@ enum TopLevel {
 
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, typedefs: HashMap::new() }
     }
 
     // --- Token navigation ---
@@ -94,6 +97,10 @@ impl Parser {
         let mut functions = Vec::new();
         let mut decls = Vec::new();
         while self.current() != &Token::EOF {
+            if self.current() == &Token::Typedef {
+                self.parse_typedef()?;
+                continue;
+            }
             match self.parse_top_level()? {
                 TopLevel::Function(f) => functions.push(f),
                 TopLevel::Decl(d) => decls.push(d),
@@ -102,8 +109,9 @@ impl Parser {
         Ok(Program { functions, decls })
     }
 
-    fn is_type_start(tok: &Token) -> bool {
+    fn is_type_start(&self, tok: &Token) -> bool {
         matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const)
+            || matches!(tok, Token::Ident(name) if self.typedefs.contains_key(name))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
@@ -134,6 +142,13 @@ impl Parser {
             Token::Bool => Type::Bool,
             Token::Long => Type::Long,
             Token::Void => Type::Void,
+            Token::Ident(name) => match self.typedefs.get(&name) {
+                Some(t) => t.clone(),
+                None => return Err(CompileError::new(
+                    format!("unknown type `{}`", name),
+                    span,
+                )),
+            }
             other => {
                 return Err(CompileError::new(
                     format!("expected a type, found {}", other.describe()),
@@ -260,9 +275,8 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Stmt::Return(expr)
             }
-            Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const => {
-                return self.parse_decl();
-            }
+
+            tok if self.is_type_start(&tok) => return self.parse_decl(),
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
             Token::If => return self.parse_if(),
@@ -397,6 +411,48 @@ impl Parser {
         Ok(left)
     }
 
+    /// `typedef <type> <name> [ '[' N ']' ] ;` — resolves `name` to a real
+    /// `Type` here. Nothing past the parser ever learns a typedef existed.
+    fn parse_typedef(&mut self) -> Result<(), CompileError> {
+        self.expect(&Token::Typedef)?;
+        let base = self.parse_type()?;
+        let name = match self.advance().clone() {
+            Token::Ident(s) => s,
+            other => return Err(CompileError::new(
+                format!("expected typedef name, found {}", other.describe()),
+                self.previous_span(),
+            )),
+        };
+        let name_span = self.previous_span();
+        let ty = if self.current() == &Token::LBracket {
+            self.advance();
+            let len = match self.advance().clone() {
+                Token::IntLiteral(n) if n >= 0 => n as usize,
+                other => return Err(CompileError::new(
+                    format!("expected array length, found {}", other.describe()),
+                    self.previous_span(),
+                )),
+            };
+            self.expect(&Token::RBracket)?;
+            Type::Array(Box::new(base), len)
+        } else {
+            base
+        };
+        self.expect(&Token::Semicolon)?;
+
+        if let Some(existing) = self.typedefs.get(&name) {
+            if *existing != ty {
+                return Err(CompileError::new(
+                    format!("`{name}` redefined as `{}`, previously `{}`", ty.describe(), existing.describe()),
+                    name_span,
+                ));
+            }
+        } else {
+            self.typedefs.insert(name, ty);
+        }
+        Ok(())
+    }
+
     fn parse_for(&mut self) -> Result<Spanned<Stmt>, CompileError> {
         let start = self.current_span();
         self.advance(); // 'for'
@@ -489,7 +545,7 @@ impl Parser {
         let start = self.current_span();
 
         // cast: ( type ) unary
-        if self.current() == &Token::LParen && Self::is_type_start(self.peek()) {
+        if self.current() == &Token::LParen && self.is_type_start(self.peek()) {
             self.advance(); // (
             let ty = self.parse_type()?;
             self.expect(&Token::RParen)?;
