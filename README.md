@@ -158,6 +158,7 @@ example a dereference of a value that is not a pointer.
 | Void type | `void`, `void *` |
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
+| Type aliases | `typedef long size_t;`, `typedef char *cstring;` |
 
 > **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`, a
 > pointer, and `void *` are 8. A local occupies its true size on the stack, aligned to
@@ -180,7 +181,7 @@ example a dereference of a value that is not a pointer.
 
 ### Not yet supported
 
-* `struct`, `union`, `enum`, and `typedef`
+* `struct`, `union`, and `enum`
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
 * The bitwise operators `&`, `|`, `^`, `<<`, and `>>`
@@ -203,8 +204,10 @@ example a dereference of a value that is not a pointer.
 
 A small header set ships inside the binary, so an install needs no data files:
 `limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, and `stdlib.h`.
-They are small on purpose. Each one uses a macro where a language feature is missing.
-For example, `size_t` is a macro for `long` until `typedef` arrives.
+They are small on purpose. Each one uses `typedef` and a macro where a language feature
+is still missing. For example, `size_t` is `typedef`'d to `long` in `stddef.h`, but
+`bool` is still a macro for `_Bool` since `stdbool.h`'s job is only to spell the keyword
+the way C99 expects.
 
 `-E` prints the preprocessed source and exits. This is the fastest way to see what
 expansion produced.
@@ -295,11 +298,12 @@ cargo test
 - Cast expressions
 - A built-in PE import table: single-DLL libc calls (`printf` and friends via `msvcrt.dll`)
   run through the default backend with no `--lld-link`
+- `typedef`
 
 **Next**
 
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
-- `struct`, `union`, `enum`, and `typedef`
+- `struct`, `union`, and `enum`
 - More control flow: `switch`, `do-while`, `break`, `continue`
 - Preprocessor: `#` stringizing, `##` pasting, `__VA_ARGS__`
 - More than four call arguments
