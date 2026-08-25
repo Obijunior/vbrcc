@@ -155,6 +155,7 @@ example a dereference of a value that is not a pointer.
 | Feature | Example |
 | --- | --- |
 | Integer types | `int`, `char`, `long` |
+| Boolean type | `_Bool`, `bool` (via `<stdbool.h>`) |
 | Void type | `void`, `void *` |
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
@@ -165,6 +166,11 @@ example a dereference of a value that is not a pointer.
 > its type. Array elements pack at element size. A narrow load sign-extends with `movsx`
 > or `movsxd`, and a store writes exactly the width of the value. `Type::size` and
 > `Type::align` in `src/ast.rs` are the one place that decides this.
+
+> **`_Bool` is its own type, 1 byte wide, not an alias for `int` or `char`.** A store
+> through a `_Bool` lvalue normalizes the value first: any nonzero value becomes exactly
+> `1`, per C99 6.3.1.2. Integer promotion and the usual arithmetic conversions are not
+> implemented yet for any type, `_Bool` included — see the roadmap.
 
 ### Statements and control flow
 
@@ -292,6 +298,7 @@ cargo test
 **Done**
 
 - Multiple integer types (`int`, `char`, `long`) and `void`
+- `_Bool` (C99 6.3.1.2 store normalization)
 - A type checker with source-located type errors
 - Pointers, address-of, dereference, and pointer arithmetic
 - Arrays and array indexing
