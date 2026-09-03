@@ -63,12 +63,92 @@ fn signatures(program: &Program) -> Sigs {
 
 pub fn check(program: &mut Program) -> Result<(), CompileError> {
     let sigs = signatures(program);
+
+    // File scope, pass 1: every global's declared type.
+    let mut file_scope: HashMap<String, Type> = HashMap::new();
+    for g in &program.globals {
+        file_scope.insert(g.name.clone(), g.ty.clone());
+    }
+
+    // Pass 2: validate each initializer. This may refine an unsized
+    // `char[]` length on `g.ty`.
+    for g in &mut program.globals {
+        check_global(g, &file_scope, &sigs)?;
+    }
+
+    // Pass 3: rebuild the file scope with refined types, then check bodies.
+    let mut file_scope: HashMap<String, Type> = HashMap::new();
+    for g in &program.globals {
+        file_scope.insert(g.name.clone(), g.ty.clone());
+    }
     for func in &mut program.functions {
-        let mut scope: HashMap<String, Type> = HashMap::new();
+        let mut scope: HashMap<String, Type> = file_scope.clone();
         for (ty, name) in &func.params {
             scope.insert(name.clone(), ty.clone());
         }
         check_block(&mut func.body, &mut scope, &sigs)?;
+    }
+    Ok(())
+}
+
+/// Type-check one global's initializer and require it to be a constant.
+/// A `None` initializer is zero-initialized and needs no check.
+fn check_global(
+    g: &mut GlobalVar,
+    file_scope: &HashMap<String, Type>,
+    sigs: &Sigs,
+) -> Result<(), CompileError> {
+    let init = match &mut g.init {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+
+    let mut scratch = file_scope.clone();
+    check_expr(init, &mut scratch, sigs)?;
+
+    match crate::constfold::eval_const(init)? {
+        crate::constfold::ConstValue::Bytes(bytes) => match &g.ty {
+            Type::Array(elem, declared) if **elem == Type::Char => {
+                if *declared == 0 {
+                    g.ty = Type::Array(Box::new(Type::Char), bytes.len());
+                } else if bytes.len() > *declared {
+                    return Err(CompileError::new(
+                        format!(
+                            "initializer-string for `{}` is too long: {} bytes into {}",
+                            g.name,
+                            bytes.len(),
+                            declared
+                        ),
+                        init.span,
+                    ));
+                }
+            }
+            _ => {
+                return Err(CompileError::new(
+                    format!(
+                        "a string initializer needs a `char` array, not `{}`",
+                        g.ty.describe()
+                    ),
+                    init.span,
+                ));
+            }
+        },
+        crate::constfold::ConstValue::Int(_) => {
+            let scalar = matches!(
+                g.ty,
+                Type::Int | Type::Char | Type::Bool | Type::Long | Type::Pointer(_)
+            );
+            if !scalar {
+                return Err(CompileError::new(
+                    format!(
+                        "invalid initializer for `{}` of type `{}`",
+                        g.name,
+                        g.ty.describe()
+                    ),
+                    init.span,
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -350,5 +430,55 @@ mod tests {
         let src = "int main() { 1 = 2; return 0; }";
         let err = typecheck(src).unwrap_err();
         assert!(err.message.contains("assign"), "message: {}", err.message);
+    }
+
+    #[test]
+    fn a_constant_folded_global_initializer_is_accepted() {
+        let program = typecheck("int g = 2 + 3 * 4; int main() { return g; }").unwrap();
+        match &program.functions[0].body[0].node {
+            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            other => panic!("expected return, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_non_constant_global_initializer_is_rejected() {
+        let err = typecheck("int f() { return 1; } int g = f(); int main() { return g; }")
+            .unwrap_err();
+        assert!(err.message.contains("not a constant"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_global_that_reads_another_global_is_not_constant() {
+        let err = typecheck("int a = 1; int b = a; int main() { return b; }").unwrap_err();
+        assert!(err.message.contains("not a constant"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_unsized_char_array_takes_its_length_from_the_string() {
+        let program = typecheck("char s[] = \"abc\"; int main() { return 0; }").unwrap();
+        assert_eq!(program.globals[0].ty, Type::Array(Box::new(Type::Char), 4));
+    }
+
+    #[test]
+    fn a_string_initializer_that_overflows_its_array_is_rejected() {
+        let err = typecheck("char s[2] = \"abc\"; int main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("too long"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_global_is_visible_inside_a_function() {
+        assert!(typecheck("int counter = 3; int main() { return counter; }").is_ok());
+    }
+
+    #[test]
+    fn a_local_shadows_a_global_of_the_same_name() {
+        assert!(typecheck("int x = 1; int main() { int x = 2; return x; }").is_ok());
+    }
+
+    #[test]
+    fn an_int_initializer_for_an_array_is_rejected() {
+        let err = typecheck("int a[2] = 5; int main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("invalid initializer"), "got: {}", err.message);
     }
 }
