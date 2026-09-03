@@ -39,6 +39,7 @@ pub struct Parser {
 enum TopLevel {
     Function(Function),
     Decl(FuncDecl),
+    Global(GlobalVar),
 }
 
 impl Parser {
@@ -96,6 +97,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Result<Program, CompileError> {
         let mut functions = Vec::new();
         let mut decls = Vec::new();
+        let mut globals = Vec::new();
         while self.current() != &Token::EOF {
             if self.current() == &Token::Typedef {
                 self.parse_typedef()?;
@@ -104,9 +106,10 @@ impl Parser {
             match self.parse_top_level()? {
                 TopLevel::Function(f) => functions.push(f),
                 TopLevel::Decl(d) => decls.push(d),
+                TopLevel::Global(g) => globals.push(g),
             }
         }
-        Ok(Program { functions, decls })
+        Ok(Program { functions, decls, globals })
     }
 
     fn is_type_start(&self, tok: &Token) -> bool {
@@ -186,6 +189,10 @@ impl Parser {
             }
         };
 
+        if self.current() != &Token::LParen {
+            return self.parse_global_tail(start, return_type, name);
+        }
+
         self.expect(&Token::LParen)?;
         let (params, variadic) = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
@@ -213,6 +220,60 @@ impl Parser {
 
         let span = start.to(self.previous_span());
         Ok(TopLevel::Function(Function { name, params, return_type, body, span }))
+    }
+
+
+    /// The tail of a top-level declaration once a `(` is ruled out.
+    /// `[ '[' N? ']' ] [ '=' initializer ] ';'`.
+    fn parse_global_tail(&mut self, start: Span, base_type: Type, name: String) -> Result<TopLevel, CompileError> {
+        let mut ty = base_type;
+        let mut unsized_array = false;
+
+        if self.current() == &Token::LBracket {
+            self.advance(); // '['
+            if self.current() == &Token::RBracket {
+                unsized_array = true;
+                ty = Type::Array(Box::new(ty), 0);
+            } else {
+                let len = match self.advance().clone() {
+                    Token::IntLiteral(n) if n >= 0 => n as usize,
+                    other => {
+                        return Err(CompileError::new(
+                            format!("expected array length, found {}", other.describe()),
+                            self.previous_span(),
+                        ));
+                    }
+                };
+                ty = Type::Array(Box::new(ty), len);
+            }
+            self.expect(&Token::RBracket)?;
+        }
+
+        let init = if self.current() == &Token::Assign {
+            self.advance(); // '='
+            if self.current() == &Token::LBrace {
+                return Err(CompileError::new(
+                    "initializer lists for globals are not supported yet",
+                    self.current_span(),
+                )
+                .with_label("use a scalar constant or a string literal"));
+            }
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        if unsized_array && init.is_none() {
+            return Err(CompileError::new(
+                "array size missing",
+                start.to(self.previous_span()),
+            )
+            .with_label("an unsized array needs a string initializer"));
+        }
+
+        self.expect(&Token::Semicolon)?;
+        let span = start.to(self.previous_span());
+        Ok(TopLevel::Global(GlobalVar {ty, name, init, span}))
     }
 
     /// Parameters between `(` and `)`, with the `)` left unconsumed.
@@ -952,4 +1013,57 @@ mod tests {
             Box::new(e(Expr::IntLiteral(5))),
         )))));
     }
+
+    #[test]
+    fn a_scalar_global_with_initializer_parses() {
+        let p = parse_src("int counter = 5;\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals.len(), 1);
+        assert_eq!(p.globals[0].name, "counter");
+        assert_eq!(p.globals[0].ty, Type::Int);
+        match &p.globals[0].init {
+            Some(e) => assert_eq!(e.node, Expr::IntLiteral(5)),
+            None => panic!("expected an initializer"),
+        }
+    }
+
+    #[test]
+    fn a_global_without_initializer_parses() {
+        let p = parse_src("long n;\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals[0].ty, Type::Long);
+        assert!(p.globals[0].init.is_none());
+    }
+
+    #[test]
+    fn a_sized_global_array_parses() {
+        let p = parse_src("char buf[100];\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals[0].ty, Type::Array(Box::new(Type::Char), 100));
+        assert!(p.globals[0].init.is_none());
+    }
+
+    #[test]
+    fn an_unsized_char_array_with_a_string_parses() {
+        let p = parse_src("char s[] = \"hi\";\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals[0].ty, Type::Array(Box::new(Type::Char), 0));
+        assert!(matches!(p.globals[0].init, Some(_)));
+    }
+
+    #[test]
+    fn a_function_after_a_global_still_parses() {
+        let p = parse_src("int g = 1;\nint main() { return g; }").unwrap();
+        assert_eq!(p.globals.len(), 1);
+        assert_eq!(p.functions.len(), 1);
+    }
+
+    #[test]
+    fn a_braced_global_initializer_is_rejected() {
+        let err = parse_src("int a[3] = {1, 2, 3};\nint main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("initializer lists"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_unsized_global_array_without_initializer_is_rejected() {
+        let err = parse_src("int a[];\nint main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("array size"), "got: {}", err.message);
+    }
+
 }

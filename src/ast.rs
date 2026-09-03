@@ -162,6 +162,7 @@ pub enum Stmt {
     },
 }
 
+/// A function definition: a name, parameters, return type, and body.
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
@@ -172,10 +173,6 @@ pub struct Function {
 }
 
 /// A function declared but not defined here: a prototype.
-///
-/// Prototypes live apart from [`Function`] because codegen walks `functions`
-/// and emits a label and a frame for each. A prototype with an empty body
-/// would emit a symbol that collides with the real one in the C runtime.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncDecl {
     pub name: String,
@@ -185,10 +182,22 @@ pub struct FuncDecl {
     pub span: Span,
 }
 
+/// The whole program: a list of functions, prototypes, and global variables.
 #[derive(Debug, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub decls: Vec<FuncDecl>,
+    pub globals: Vec<GlobalVar>,
+}
+
+
+/// A global variable, which may be initialized.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlobalVar {
+    pub ty: Type,
+    pub name: String,
+    pub init: Option<TypedExpr>,
+    pub span: Span,
 }
 
 #[cfg(test)]
