@@ -32,17 +32,19 @@ pub struct Codegen {
     data_section: String,
     string_count: usize,
     variables: HashMap<String, i64>, // name -> rbp offset
-    stack_offset: i64, 
+    globals: HashMap<String, Type>,  // name -> type, addressed as [rip + name]
+    stack_offset: i64,
     label_count: usize,
 }
 
 impl Codegen {
     pub fn new() -> Self {
-        Codegen { 
-            output: String::new(), 
+        Codegen {
+            output: String::new(),
             data_section: String::new(),
             string_count: 0,
             variables: HashMap::new(),
+            globals: HashMap::new(),
             stack_offset: 0,
             label_count: 0,
         }
@@ -104,7 +106,71 @@ impl Codegen {
         self.emit_data(&format!("    .ascii \"{}\\0\"", s.escape_default()));
         label
     }
-    
+
+    /// The assembly operand for a variable reference: a frame slot for a
+    /// local, a RIP-relative label for a global. `None` if neither.
+    ///
+    /// `lea rax, [rip + g]` and `lea rax, [rbp - 8]` are both valid, so one
+    /// string serves a load, a store, and an address-of.
+    fn var_operand(&self, name: &str) -> Option<String> {
+        if let Some(off) = self.variables.get(name) {
+            Some(format!("[rbp - {}]", -off))
+        } else if self.globals.contains_key(name) {
+            Some(format!("[rip + {name}]"))
+        } else {
+            None
+        }
+    }
+
+    /// Emit one global into the data section: a label plus a size-typed
+    /// directive. `None` init is zero-filled.
+    fn gen_global(&mut self, g: &GlobalVar) -> Result<(), CompileError> {
+        self.emit_data("  .section .data");
+        self.emit_data(&format!("{}:", g.name));
+
+        let init = match &g.init {
+            None => {
+                self.emit_data(&format!("    .zero {}", g.ty.size()));
+                return Ok(());
+            }
+            Some(e) => e,
+        };
+
+        match crate::constfold::eval_const(init)? {
+            crate::constfold::ConstValue::Int(n) => {
+                if g.ty == Type::Bool {
+                    self.emit_data(&format!("    .byte {}", (n != 0) as i64));
+                } else {
+                    match g.ty.size() {
+                        1 => self.emit_data(&format!("    .byte {n}")),
+                        4 => self.emit_data(&format!("    .long {n}")),
+                        _ => self.emit_data(&format!("    .quad {n}")),
+                    }
+                }
+            }
+            crate::constfold::ConstValue::Bytes(bytes) => {
+                let escaped: String = bytes
+                    .iter()
+                    .map(|&c| match c {
+                        0 => "\\0".to_string(),
+                        b'"' => "\\\"".to_string(),
+                        b'\\' => "\\\\".to_string(),
+                        b'\n' => "\\n".to_string(),
+                        b'\t' => "\\t".to_string(),
+                        0x20..=0x7E => (c as char).to_string(),
+                        _ => "\\0".to_string(),
+                    })
+                    .collect();
+                self.emit_data(&format!("    .ascii \"{escaped}\""));
+                let declared = g.ty.size();
+                if declared > bytes.len() {
+                    self.emit_data(&format!("    .zero {}", declared - bytes.len()));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn align_up(value: i64, align: i64) -> i64 {
         (value + align - 1) & !(align - 1)
     }
@@ -116,6 +182,13 @@ impl Codegen {
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, CompileError> {
+        for g in &program.globals {
+            self.globals.insert(g.name.clone(), g.ty.clone());
+        }
+        for g in &program.globals {
+            self.gen_global(g)?;
+        }
+
         // Reserve space for data section (filled in as we go)
         for function in &program.functions {
             self.gen_function(function)?;
@@ -276,11 +349,11 @@ impl Codegen {
     fn gen_lvalue_addr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::Var(name) => {
-                let offset = *self.variables.get(name).ok_or_else(|| {
+                let operand = self.var_operand(name).ok_or_else(|| {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
                 })?;
-                self.emit(&format!("  lea rax, [rbp - {}]", -offset));
+                self.emit(&format!("  lea rax, {operand}"));
             }
             Expr::Deref(inner) => {
                 // The address of `*p` is the value of `p`.
@@ -468,16 +541,15 @@ impl Codegen {
                 }
             }
             Expr::Var(name) => {
-                let offset = *self.variables.get(name).ok_or_else(|| {
+                let operand = self.var_operand(name).ok_or_else(|| {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
                 })?;
                 if matches!(expr.ty, Type::Array(_, _)) {
                     // Array decays to a pointer to its first element.
-                    self.emit(&format!("  lea rax, [rbp - {}]", -offset));
+                    self.emit(&format!("  lea rax, {operand}"));
                 } else {
-                    let addr = format!("[rbp - {}]", -offset);
-                    self.emit_load(&addr, expr.ty.size());
+                    self.emit_load(&operand, expr.ty.size());
                 }
             }
 
@@ -772,5 +844,53 @@ mod tests {
     fn test_store_through_pointer() {
         let asm = compile("int main() { int x = 0; int *p = &x; *p = 7; return x; }");
         assert!(asm.contains("mov dword ptr [rax], rcx"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_scalar_global_is_emitted_into_data() {
+        let asm = compile("int counter = 42; int main() { return counter; }");
+        assert!(asm.contains(".section .data"), "asm:\n{asm}");
+        assert!(asm.contains("counter:"), "asm:\n{asm}");
+        assert!(asm.contains(".long 42"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_global_is_read_through_rip() {
+        let asm = compile("int counter = 42; int main() { return counter; }");
+        assert!(asm.contains("[rip + counter]"), "asm:\n{asm}");
+        assert!(!asm.contains("[rbp"), "counter must not be a frame slot:\n{asm}");
+    }
+
+    #[test]
+    fn a_global_is_written_through_rip() {
+        let asm = compile("int g; int main() { g = 7; return g; }");
+        assert!(asm.contains("[rip + g]"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn an_uninitialized_global_is_zero_filled() {
+        let asm = compile("int g; int main() { return g; }");
+        assert!(asm.contains("g:"), "asm:\n{asm}");
+        assert!(asm.contains(".zero 4"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_char_array_global_emits_ascii_bytes() {
+        let asm = compile("char s[] = \"hi\"; int main() { return s[0]; }");
+        assert!(asm.contains("s:"), "asm:\n{asm}");
+        assert!(asm.contains(r#".ascii "hi\0""#), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_nonzero_bool_global_is_stored_as_one() {
+        let asm = compile("_Bool b = 5; int main() { return b; }");
+        assert!(asm.contains("b:"), "asm:\n{asm}");
+        assert!(asm.contains(".byte 1"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_local_still_uses_a_frame_slot() {
+        let asm = compile("int main() { int x = 3; return x; }");
+        assert!(asm.contains("[rbp -"), "asm:\n{asm}");
     }
 }
