@@ -27,6 +27,14 @@ use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;
 
+/// Where a named variable lives, from [`Codegen::var_loc`].
+enum VarLoc {
+    /// A frame slot at this `rbp` offset (negative).
+    Local(i64),
+    /// A `.data` label, reached as `[rip + name]`.
+    Global,
+}
+
 pub struct Codegen {
     output: String,
     data_section: String,
@@ -107,16 +115,17 @@ impl Codegen {
         label
     }
 
-    /// The assembly operand for a variable reference: a frame slot for a
-    /// local, a RIP-relative label for a global. `None` if neither.
+    /// Where a name lives. A local shadows a global of the same name, so
+    /// `variables` is checked first.
     ///
-    /// `lea rax, [rip + g]` and `lea rax, [rbp - 8]` are both valid, so one
-    /// string serves a load, a store, and an address-of.
-    fn var_operand(&self, name: &str) -> Option<String> {
-        if let Some(off) = self.variables.get(name) {
-            Some(format!("[rbp - {}]", -off))
+    /// The assembler accepts a RIP-relative label only as a `lea` operand,
+    /// not inside `mov`/`movsx`. So a global read or write goes through its
+    /// address: `lea rax, [rip + name]` then load or store `[rax]`.
+    fn var_loc(&self, name: &str) -> Option<VarLoc> {
+        if let Some(&off) = self.variables.get(name) {
+            Some(VarLoc::Local(off))
         } else if self.globals.contains_key(name) {
-            Some(format!("[rip + {name}]"))
+            Some(VarLoc::Global)
         } else {
             None
         }
@@ -349,11 +358,13 @@ impl Codegen {
     fn gen_lvalue_addr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::Var(name) => {
-                let operand = self.var_operand(name).ok_or_else(|| {
+                match self.var_loc(name).ok_or_else(|| {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
-                })?;
-                self.emit(&format!("  lea rax, {operand}"));
+                })? {
+                    VarLoc::Local(off) => self.emit(&format!("  lea rax, [rbp - {}]", -off)),
+                    VarLoc::Global => self.emit(&format!("  lea rax, [rip + {name}]")),
+                }
             }
             Expr::Deref(inner) => {
                 // The address of `*p` is the value of `p`.
@@ -541,15 +552,29 @@ impl Codegen {
                 }
             }
             Expr::Var(name) => {
-                let operand = self.var_operand(name).ok_or_else(|| {
+                let loc = self.var_loc(name).ok_or_else(|| {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
                 })?;
-                if matches!(expr.ty, Type::Array(_, _)) {
-                    // Array decays to a pointer to its first element.
-                    self.emit(&format!("  lea rax, {operand}"));
-                } else {
-                    self.emit_load(&operand, expr.ty.size());
+                let is_array = matches!(expr.ty, Type::Array(_, _));
+                match loc {
+                    VarLoc::Local(off) => {
+                        let addr = format!("[rbp - {}]", -off);
+                        if is_array {
+                            // Array decays to a pointer to its first element.
+                            self.emit(&format!("  lea rax, {addr}"));
+                        } else {
+                            self.emit_load(&addr, expr.ty.size());
+                        }
+                    }
+                    VarLoc::Global => {
+                        // The address first; the assembler has no
+                        // `mov reg, [rip + label]`.
+                        self.emit(&format!("  lea rax, [rip + {name}]"));
+                        if !is_array {
+                            self.emit_load("[rax]", expr.ty.size());
+                        }
+                    }
                 }
             }
 
