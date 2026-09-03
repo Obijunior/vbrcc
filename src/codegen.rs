@@ -6,9 +6,6 @@
 //!
 //! # Rules
 //!
-//! Break one of these rules and the compiler still emits assembly. The assembly is
-//! wrong.
-//!
 //! - Every expression puts its result in `rax`.
 //! - `rsp` does not move after the prologue. Intermediate values go into frame slots
 //!   through `spill_rax`, never through `push`. See that method for the reason.
@@ -22,8 +19,8 @@
 //!
 //! # Values and addresses
 //!
-//! `gen_expr` puts the **value** of an expression in `rax`. `gen_lvalue_addr` puts the
-//! **address** of an lvalue in `rax`. Use the second one for `&x`, for a store through
+//! `gen_expr` puts the value of an expression in `rax`. `gen_lvalue_addr` puts the
+//! address of an lvalue in `rax`. Use the second one for `&x`, for a store through
 //! a pointer, and for an index.
 
 use crate::ast::*;
@@ -75,11 +72,6 @@ impl Codegen {
     }
 
     /// Save `rax` into a new frame slot. Returns the offset of the slot from `rbp`.
-    ///
-    /// This must not use `push`. A callee measures its 32 bytes of shadow space from
-    /// `rsp`, so a `push` puts the value where the next call writes. A `push` also
-    /// breaks the 16-byte stack alignment that Win64 requires at a `call`.
-    /// `f(1) + g(2)` returned 4 before frame slots replaced the push.
     fn spill_rax(&mut self) -> i64 {
         self.stack_offset -= 8;
         let slot = self.stack_offset;
@@ -92,8 +84,7 @@ impl Codegen {
         self.emit(&format!("  mov {}, [rbp - {}]", reg, -slot));
     }
 
-    /// Collapse rax to 0 or 1. C99 6.3.1.2: any nonzero value stored through
-    /// a _Bool lvalue becomes exactly 1.
+    /// Collapse rax to 0 or 1
     fn normalize_bool(&mut self) {
         self.emit("  cmp rax, 0");
         self.emit("  setne al");
