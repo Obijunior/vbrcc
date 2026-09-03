@@ -177,6 +177,25 @@ fn parse_reg_regimm(operands: &[&str], raw: &str) -> Result<(Register64, RegOrIm
     }
 }
 
+/// Parse a data-directive integer: decimal or `0x` hex, optional leading `-`.
+fn parse_data_int(s: &str, raw: &str) -> Result<i64, String> {
+    let s = s.trim();
+    let (neg, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, s),
+    };
+    let magnitude = match digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        Some(hex) => i64::from_str_radix(hex, 16),
+        None => digits.parse::<i64>(),
+    }
+    .map_err(|_| format!("[ ERROR ] :: invalid integer in data directive: {}", raw))?;
+    Ok(if neg { -magnitude } else { magnitude })
+}
+
+
 pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
     let mut line = raw.trim();
     if line.is_empty() || line.starts_with(';') { return Ok(AsmLine::None); }
@@ -229,6 +248,34 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
         }
         return Ok(AsmLine::DataBytes(bytes));
     }
+
+    // Integer and zero-fill data directives, emitted by codegen for globals.
+    if let Some(rest) = line.strip_prefix(".byte ") {
+        let n = parse_data_int(rest, raw)?;
+        return Ok(AsmLine::DataBytes(vec![n as u8]));
+    }
+    if let Some(rest) = line
+        .strip_prefix(".long ")
+        .or_else(|| line.strip_prefix(".int "))
+    {
+        let n = parse_data_int(rest, raw)?;
+        return Ok(AsmLine::DataBytes((n as i32 as u32).to_le_bytes().to_vec()));
+    }
+    if let Some(rest) = line.strip_prefix(".quad ") {
+        let n = parse_data_int(rest, raw)?;
+        return Ok(AsmLine::DataBytes((n as i64).to_le_bytes().to_vec()));
+    }
+    if let Some(rest) = line
+        .strip_prefix(".zero ")
+        .or_else(|| line.strip_prefix(".space "))
+    {
+        let count: usize = rest
+            .trim()
+            .parse()
+            .map_err(|_| format!("[ ERROR ] :: .zero expects a byte count: {}", raw))?;
+        return Ok(AsmLine::DataBytes(vec![0u8; count]));
+    }
+
 
     if let Some((head, _)) = line.split_once(';') {
         line = head.trim();
@@ -624,4 +671,50 @@ mod tests {
             other => panic!("expected LeaRegMemDisp, got {:?}", other),
         }
     }
+
+    #[test]
+    fn parses_byte_directive() {
+        match parse_intel_line("  .byte 65").unwrap() {
+            AsmLine::DataBytes(b) => assert_eq!(b, vec![65]),
+            other => panic!("expected DataBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_long_directive_little_endian() {
+        match parse_intel_line(".long 300").unwrap() {
+            AsmLine::DataBytes(b) => assert_eq!(b, vec![0x2C, 0x01, 0x00, 0x00]),
+            other => panic!("expected DataBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_quad_directive_negative() {
+        match parse_intel_line(".quad -1").unwrap() {
+            AsmLine::DataBytes(b) => assert_eq!(b, vec![0xFF; 8]),
+            other => panic!("expected DataBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_hex_data_operand() {
+        match parse_intel_line(".long 0xdeadbeef").unwrap() {
+            AsmLine::DataBytes(b) => assert_eq!(b, vec![0xEF, 0xBE, 0xAD, 0xDE]),
+            other => panic!("expected DataBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_zero_fill_directive() {
+        match parse_intel_line(".zero 4").unwrap() {
+            AsmLine::DataBytes(b) => assert_eq!(b, vec![0, 0, 0, 0]),
+            other => panic!("expected DataBytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_a_malformed_data_operand() {
+        assert!(parse_intel_line(".long notanumber").is_err());
+    }
+
 }

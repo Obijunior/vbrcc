@@ -170,3 +170,21 @@ fn test_full_pipeline_c_to_executable() -> Result<(), Box<dyn std::error::Error>
 
     Ok(())
 }
+
+#[test]
+fn a_data_label_defined_with_long_is_reachable_by_rip() {
+    let asm = "\
+.intel_syntax noprefix
+.section .data
+counter:
+  .long 42
+.section .text
+.globl main
+main:
+  lea rax, [rip + counter]
+  ret
+";
+    let (text, data, _idata, _entry) = assembler::assemble(asm).unwrap();
+    assert_eq!(data, vec![42, 0, 0, 0], "counter is four little-endian bytes");
+    assert!(!text.is_empty(), "main assembled to bytes");
+}
