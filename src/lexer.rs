@@ -21,7 +21,7 @@
 //!   not. The preprocessor needs the second form, because one `EOF` for each line would
 //!   end the parse early.
 
-use crate::diagnostic::{CompileError, Span, FileId};
+use crate::diagnostic::{CompileError, FileId, Span};
 
 #[derive(Debug, Clone, PartialEq)]  // so we can use '{:?}' and compare tokens. Clone for duplicating tokens when needed.
 pub enum Token {
@@ -40,6 +40,7 @@ pub enum Token {
     Long,
     Void,
     Typedef,
+    Struct,
 
     // keywords
     Return,
@@ -86,8 +87,9 @@ pub enum Token {
     Ampersand,
     LBracket,
     RBracket,
-    /// `...`, the variadic marker in a parameter list.
     Ellipsis,
+    Dot,
+    Arrow,
 
     EOF,
 }
@@ -110,6 +112,7 @@ impl Token {
             Token::Char => "`char`".to_string(),
             Token::Long => "`long`".to_string(),
             Token::Void => "`void`".to_string(),
+            Token::Struct => "`struct`".to_string(),
             Token::Typedef => "`typedef`".to_string(),
             Token::Bool => "`_Bool`".to_string(),
             Token::Return => "`return`".to_string(),
@@ -119,6 +122,8 @@ impl Token {
             Token::Else => "`else`".to_string(),
             Token::Const => "`const`".to_string(),
             Token::Ellipsis => "`...`".to_string(),
+            Token::Dot => "`.`".to_string(),
+            Token::Arrow => "`->`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Plus => "`+`".to_string(),
             Token::Star => "`*`".to_string(),
@@ -173,6 +178,7 @@ impl Token {
             Token::Void => "void".to_string(),
             Token::Bool => "_Bool".to_string(),
             Token::Typedef => "typedef".to_string(),
+            Token::Struct => "struct".to_string(),
             Token::Return => "return".to_string(),
             Token::For => "for".to_string(),
             Token::While => "while".to_string(),
@@ -208,6 +214,8 @@ impl Token {
             Token::Bang => "!".to_string(),
             Token::Tilde => "~".to_string(),
             Token::Comma => ",".to_string(),
+            Token::Dot => ".".to_string(),
+            Token::Arrow => "->".to_string(),
             Token::Colon => ":".to_string(),
             Token::LessThan => "<".to_string(),
             Token::LessThanEquals => "<=".to_string(),
@@ -381,6 +389,7 @@ impl Lexer {
             "const" => Token::Const,
             "_Bool" => Token::Bool,
             "typedef" => Token::Typedef,
+            "struct" => Token::Struct,
             _ => Token::Ident(ident),
         }
     }
@@ -416,11 +425,7 @@ impl Lexer {
                         .with_label("did you mean `...`?"));
                     }
                 } else {
-                    return Err(CompileError::new(
-                        "unexpected character `.`",
-                        Span::in_file(self.file, start, self.position),
-                    )
-                    .with_label("struct members and floating point are not supported yet"));
+                    Token::Dot
                 }
             },
             Some('-') => { 
@@ -428,6 +433,7 @@ impl Lexer {
                 match self.current() {
                     Some('-') => { self.advance(); Token::MinusMinus },
                     Some('=') => { self.advance(); Token::MinusEquals },
+                    Some('>') => { self.advance(); Token::Arrow },
                     _ => Token::Minus,
                 } 
             },
@@ -808,14 +814,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_dot_is_a_located_error() {
-        let src = "int x = a.b;";
-        let err = Lexer::new(src).tokenize().unwrap_err();
-        assert!(err.message.contains('.'), "got: {}", err.message);
-        assert_eq!(err.span.start, src.find('.').unwrap());
-    }
-
-    #[test]
     fn two_dots_are_rejected_with_a_hint() {
         let err = Lexer::new("int f(..);").tokenize().unwrap_err();
         assert!(err.label.as_deref().unwrap_or("").contains("..."), "got: {:?}", err.label);
@@ -852,4 +850,26 @@ mod tests {
         let err = Lexer::new("int x = 1; # oops").tokenize().unwrap_err();
         assert!(err.message.contains('#'), "got: {}", err.message);
     }
+
+    #[test]
+    fn member_access_tokens() {
+        assert_eq!(lex("a.b"), vec![
+            Token::Ident("a".into()), Token::Dot, Token::Ident("b".into()), Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn arrow_is_one_token() {
+        assert_eq!(lex("p->next"), vec![
+            Token::Ident("p".into()), Token::Arrow, Token::Ident("next".into()), Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn struct_is_a_keyword() {
+        assert_eq!(lex("struct Point"), vec![
+            Token::Struct, Token::Ident("Point".into()), Token::EOF,
+        ]);
+    }
+
 }
