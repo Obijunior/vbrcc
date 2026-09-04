@@ -29,6 +29,7 @@ pub enum Type {
     Void,
     Pointer(Box<Type>),
     Array(Box<Type>, usize),
+    Struct { tag: Option<String>, fields: Vec<StructField>, size: usize, align: usize },
     Unknown,
 }
 
@@ -40,6 +41,7 @@ impl Type {
             Type::Bool => 1,
             Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
+            Type::Struct { size, .. } => *size,
             Type::Unknown => 8,
         }
     }
@@ -51,6 +53,7 @@ impl Type {
             Type::Bool => 1,
             Type::Long | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
+            Type::Struct { align, .. } => *align,
             Type::Unknown => 8,
         }
     }
@@ -79,6 +82,10 @@ impl Type {
             Type::Void => "void".to_string(),
             Type::Pointer(t) => format!("{}*", t.describe()),
             Type::Array(t, n) => format!("{}[{}]", t.describe(), n),
+            Type::Struct { tag, .. } => match tag {
+                Some(name) => format!("struct {name}"),
+                None => "struct <anonymous>".to_string(),
+            },
             Type::Unknown => "<unknown>".to_string(),
         }
     }
@@ -111,6 +118,7 @@ pub enum Expr {
     Index(Box<TypedExpr>, Box<TypedExpr>),  // base[idx]
     Cast(Type, Box<TypedExpr>),             // (T)expr
     PostIncDec(IncDec, Box<TypedExpr>),     // expr++ or expr--
+    Member(Box<TypedExpr>, String),         // expr.field
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +206,13 @@ pub struct GlobalVar {
     pub name: String,
     pub init: Option<TypedExpr>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: Type,
+    pub offset: usize,
 }
 
 #[cfg(test)]

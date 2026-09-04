@@ -28,6 +28,7 @@
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;
+use std::f32::consts::E;
 
 /// What a call site needs to know about a function.
 struct Sig {
@@ -314,6 +315,9 @@ fn check_expr(
                     sig.return_type.clone()
                 }
             }
+        }
+        Expr::Member(..) => {
+            return Err(CompileError::new("struct member access is not implemented yet", span));
         }
     };
     expr.ty = ty;
