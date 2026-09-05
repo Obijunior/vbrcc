@@ -33,6 +33,7 @@ pub struct Parser {
     tokens: Vec<SpannedToken>,
     pos: usize,
     typedefs: HashMap<String, Type>,
+    structs: HashMap<String, Type>,
 }
 
 /// What one top-level item turned out to be.
@@ -44,7 +45,7 @@ enum TopLevel {
 
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
-        Parser { tokens, pos: 0, typedefs: HashMap::new() }
+        Parser { tokens, pos: 0, typedefs: HashMap::new(), structs: HashMap::new() }
     }
 
     // --- Token navigation ---
@@ -78,6 +79,10 @@ impl Parser {
         self.tokens.get(self.pos + 1).map(|st| &st.token).unwrap_or(&Token::EOF)
     }
 
+    fn peek2(&self) -> &Token {
+        self.tokens.get(self.pos + 2).map(|st| &st.token).unwrap_or(&Token::EOF)
+    }
+
     fn expect(&mut self, expected: &Token) -> Result<(), CompileError> {
         let span = self.current_span();
         let tok = self.advance().clone();
@@ -92,6 +97,37 @@ impl Parser {
         }
     }
 
+    fn expect_ident(&mut self, what: &str) -> Result<String, CompileError> {
+        let span = self.current_span();
+        match self.advance().clone() {
+            Token::Ident(s) => Ok(s),
+            other => Err(CompileError::new(
+                format!("expected {what}, found {}", other.describe()),
+                span,
+            )),
+        }
+    }
+
+    /// Assign each member a byte offset. A member sits at the next offset that
+    /// is a multiple of its own alignment. The struct's alignment is the
+    /// largest member alignment (at least 1); its size is the end of the last
+    /// member rounded up to that alignment.
+    fn layout_struct(members: &[(Type, String)]) -> (Vec<StructField>, usize, usize) {
+        let mut fields = Vec::with_capacity(members.len());
+        let mut offset = 0usize;
+        let mut align = 1usize;
+        for (ty, name) in members {
+            let a = ty.align().max(1);
+            align = align.max(a);
+            offset = (offset + a - 1) & !(a - 1);
+            fields.push(StructField { name: name.clone(), ty: ty.clone(), offset });
+            offset += ty.size();
+        }
+        let size = (offset + align - 1) & !(align - 1);
+        (fields, size.max(align), align)
+    }
+
+
     // --- Grammar rules ---
 
     pub fn parse_program(&mut self) -> Result<Program, CompileError> {
@@ -103,6 +139,29 @@ impl Parser {
                 self.parse_typedef()?;
                 continue;
             }
+            if self.current() == &Token::Struct {
+                // A `{`-bodied struct type here is a definition. It may stand
+                // alone (`struct T { ... };`) or carry a declarator right
+                // after the closing brace (`struct T { ... } name;`).
+                // (peek past an optional tag to a `{`)
+                let looks_like_def = self.peek() == &Token::LBrace
+                    || (matches!(self.peek(), Token::Ident(_)) && self.peek2() == &Token::LBrace);
+                if looks_like_def {
+                    let start = self.current_span();
+                    let ty = self.parse_struct_type()?;   // registers it in self.structs
+                    if self.current() == &Token::Semicolon {
+                        self.advance();
+                        continue;
+                    }
+                    match self.parse_declarator_tail(start, ty)? {
+                        TopLevel::Function(f) => functions.push(f),
+                        TopLevel::Decl(d) => decls.push(d),
+                        TopLevel::Global(g) => globals.push(g),
+                    }
+                    continue;
+                }
+            }
+
             match self.parse_top_level()? {
                 TopLevel::Function(f) => functions.push(f),
                 TopLevel::Decl(d) => decls.push(d),
@@ -113,7 +172,7 @@ impl Parser {
     }
 
     fn is_type_start(&self, tok: &Token) -> bool {
-        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const)
+        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const | Token::Struct)
             || matches!(tok, Token::Ident(name) if self.typedefs.contains_key(name))
     }
 
@@ -139,6 +198,16 @@ impl Parser {
             self.advance();
         }
         let span = self.current_span();
+        if self.current() == &Token::Struct {
+            let mut ty = self.parse_struct_type()?;
+            loop {
+                if self.current() == &Token::Star { self.advance(); ty = Type::Pointer(Box::new(ty)); }
+                else if self.current() == &Token::Const { self.advance(); }
+                else { break; }
+            }
+            return Ok(ty);
+        }
+
         let mut ty = match self.advance().clone() {
             Token::Int => Type::Int,
             Token::Char => Type::Char,
@@ -178,7 +247,15 @@ impl Parser {
     fn parse_top_level(&mut self) -> Result<TopLevel, CompileError> {
         let start = self.current_span();
         let return_type = self.parse_type()?;
+        self.parse_declarator_tail(start, return_type)
+    }
 
+    /// The rest of a top-level item once its type is already in hand: a
+    /// name, then either a global tail or a parameter list and a body/`;`.
+    /// Shared by `parse_top_level` (the common case) and `parse_program`'s
+    /// struct branch, where the type was a `struct T { ... }` definition
+    /// parsed directly rather than through `parse_type`.
+    fn parse_declarator_tail(&mut self, start: Span, return_type: Type) -> Result<TopLevel, CompileError> {
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -645,13 +722,33 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<TypedExpr, CompileError> {
         let mut expr = self.parse_primary()?;
-        while self.current() == &Token::LBracket {
-            let start = expr.span;
-            self.advance(); // [
-            let idx = self.parse_expr()?;
-            self.expect(&Token::RBracket)?;
-            let span = start.to(self.previous_span());
-            expr = TypedExpr::new(Expr::Index(Box::new(expr), Box::new(idx)), span);
+        loop {
+            match self.current() {
+                Token::LBracket => {
+                    let start = expr.span;
+                    self.advance(); // [
+                    let idx = self.parse_expr()?;
+                    self.expect(&Token::RBracket)?;
+                    let span = start.to(self.previous_span());
+                    expr = TypedExpr::new(Expr::Index(Box::new(expr), Box::new(idx)), span);
+                }
+                Token::Dot => {
+                    let start = expr.span;
+                    self.advance();
+                    let field = self.expect_ident("a member name")?;
+                    let span = start.to(self.previous_span());
+                    expr = TypedExpr::new(Expr::Member(Box::new(expr), field), span);
+                }
+                Token::Arrow => {
+                    let start = expr.span;
+                    self.advance();
+                    let field = self.expect_ident("a member name")?;
+                    let span = start.to(self.previous_span());
+                    let deref = TypedExpr::new(Expr::Deref(Box::new(expr)), span);
+                    expr = TypedExpr::new(Expr::Member(Box::new(deref), field), span);
+                }
+                _ => break,
+            }
         }
         Ok(expr)
     }
@@ -693,6 +790,66 @@ impl Parser {
         };
         Ok(TypedExpr::new(node, start.to(self.previous_span())))
     }
+
+    /// Parse a `struct` type reference or definition. Current token is `Token::Struct`.
+    fn parse_struct_type(&mut self) -> Result<Type, CompileError> {
+        self.advance(); // 'struct'
+        let tag = match self.current().clone() {
+            Token::Ident(name) => { self.advance(); Some(name) }
+            _ => None,
+        };
+
+        if self.current() != &Token::LBrace {
+            // A bare reference: `struct Tag`. Must already be defined.
+            let name = tag.ok_or_else(|| CompileError::new(
+                "anonymous struct needs a body", self.current_span(),
+            ))?;
+            return self.structs.get(&name).cloned().ok_or_else(|| {
+                CompileError::new(format!("unknown struct `{name}`"), self.previous_span())
+            });
+        }
+
+        self.advance(); // '{'
+        let mut members: Vec<(Type, String)> = Vec::new();
+        while self.current() != &Token::RBrace {
+            let mty = self.parse_type()?;
+            let mname = match self.advance().clone() {
+                Token::Ident(s) => s,
+                other => return Err(CompileError::new(
+                    format!("expected a member name, found {}", other.describe()),
+                    self.previous_span(),
+                )),
+            };
+            // one `[N]` on a member is allowed (reuse parse_array_dims if present)
+            let mty = if self.current() == &Token::LBracket {
+                self.advance();
+                let n = match self.advance().clone() {
+                    Token::IntLiteral(n) if n >= 0 => n as usize,
+                    other => return Err(CompileError::new(
+                        format!("expected array length, found {}", other.describe()),
+                        self.previous_span(),
+                    )),
+                };
+                self.expect(&Token::RBracket)?;
+                Type::Array(Box::new(mty), n)
+            } else { mty };
+            self.expect(&Token::Semicolon)?;
+            members.push((mty, mname));
+        }
+        self.expect(&Token::RBrace)?;
+
+        if members.is_empty() {
+            return Err(CompileError::new("an empty struct is not supported", self.previous_span()));
+        }
+
+        let (fields, size, align) = Self::layout_struct(&members);
+        let ty = Type::Struct { tag: tag.clone(), fields, size, align };
+        if let Some(name) = tag {
+            self.structs.insert(name, ty.clone());
+        }
+        Ok(ty)
+    }
+
 }
 
 
@@ -1065,5 +1222,92 @@ mod tests {
         let err = parse_src("int a[];\nint main() { return 0; }").unwrap_err();
         assert!(err.message.contains("array size"), "got: {}", err.message);
     }
+
+    #[test]
+    fn parse_struct_definition_and_variable() {
+        // struct Point { int x; int y; } p;
+        let src = "struct Point { int x; int y; } p;";
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = Parser::new(tokens).parse_program().unwrap();
+        assert_eq!(program.globals.len(), 1);
+        match &program.globals[0].ty {
+            Type::Struct { tag, fields, size, align } => {
+                assert_eq!(tag.as_deref(), Some("Point"));
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].offset, 0);
+                assert_eq!(fields[1].offset, 4);
+                assert_eq!(*size, 8);
+                assert_eq!(*align, 4);
+            }
+            other => panic!("expected Type::Struct, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_struct_layout_pads_for_alignment() {
+        // struct S { char c; int n; }  -> c@0, n@4, size 8, align 4
+        let src = "struct S { char c; int n; } s;";
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = Parser::new(tokens).parse_program().unwrap();
+        match &program.globals[0].ty {
+            Type::Struct { fields, size, align, .. } => {
+                assert_eq!(fields[0].offset, 0);
+                assert_eq!(fields[1].offset, 4);
+                assert_eq!(*size, 8);
+                assert_eq!(*align, 4);
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_member_and_arrow_in_postfix() {
+        // a.b and p->c
+        let dot = {
+            let toks = crate::lexer::Lexer::new("a.b;").tokenize().unwrap();
+            Parser::new(toks).parse_statement().unwrap()
+        };
+        match dot.node {
+            Stmt::Expr(e) => match e.node {
+                Expr::Member(base, f) => {
+                    assert!(matches!(base.node, Expr::Var(ref n) if n == "a"));
+                    assert_eq!(f, "b");
+                }
+                other => panic!("got {other:?}"),
+            },
+            other => panic!("got {other:?}"),
+        }
+
+        let arrow = {
+            let toks = crate::lexer::Lexer::new("p->c;").tokenize().unwrap();
+            Parser::new(toks).parse_statement().unwrap()
+        };
+        match arrow.node {
+            Stmt::Expr(e) => match e.node {
+                Expr::Member(base, f) => {
+                    assert!(matches!(base.node, Expr::Deref(_)));
+                    assert_eq!(f, "c");
+                }
+                other => panic!("got {other:?}"),
+            },
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_typedef_anonymous_struct() {
+        // typedef struct { int x; } Wrap;  then  Wrap w;
+        let src = "typedef struct { int x; } Wrap; Wrap w;";
+        let tokens = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        let program = Parser::new(tokens).parse_program().unwrap();
+        match &program.globals[0].ty {
+            Type::Struct { tag, fields, .. } => {
+                assert!(tag.is_none());
+                assert_eq!(fields[0].name, "x");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
 
 }

@@ -597,6 +597,14 @@ impl Codegen {
                 self.gen_expr(inner)?;
             }
 
+            Expr::Member(..) => {
+                // TODO(item 10, task 5): offset arithmetic on the member's address.
+                return Err(CompileError::new(
+                    "member access not implemented",
+                    expr.span,
+                ));
+            }
+
             Expr::Assign(lval, value) => {
                 self.gen_expr(value)?;
                 if lval.ty == Type::Bool {
