@@ -28,7 +28,6 @@
 use crate::ast::*;
 use crate::diagnostic::{CompileError, Spanned};
 use std::collections::HashMap;
-use std::f32::consts::E;
 
 /// What a call site needs to know about a function.
 struct Sig {
@@ -198,7 +197,7 @@ fn check_stmt(
 }
 
 fn is_lvalue(e: &Expr) -> bool {
-    matches!(e, Expr::Var(_) | Expr::Deref(_) | Expr::Index(_, _))
+    matches!(e, Expr::Var(_) | Expr::Deref(_) | Expr::Index(_, _) | Expr::Member(_, _))
 }
 
 fn check_expr(
@@ -316,8 +315,27 @@ fn check_expr(
                 }
             }
         }
-        Expr::Member(..) => {
-            return Err(CompileError::new("struct member access is not implemented yet", span));
+        Expr::Member(base, field) => {
+            check_expr(base, scope, sigs)?;
+            let fields = match &base.ty {
+                Type::Struct { fields, .. } => fields,
+                other => {
+                    return Err(CompileError::new(
+                        format!("`{}` is not a struct", other.describe()),
+                        span,
+                    )
+                    .with_label("has no members"));
+                }
+            };
+            match fields.iter().find(|f| f.name == *field) {
+                Some(f) => f.ty.clone(),
+                None => {
+                    return Err(CompileError::new(
+                        format!("no member `{field}` on `{}`", base.ty.describe()),
+                        span,
+                    ));
+                }
+            }
         }
     };
     expr.ty = ty;
@@ -342,6 +360,13 @@ mod tests {
         let mut program = Parser::new(tokens).parse_program().unwrap();
         check(&mut program)?;
         Ok(program)
+    }
+
+    /// Parse `src` without type-checking it, so a test can run `check` itself
+    /// and inspect the error (or success) directly.
+    fn parse(src: &str) -> Program {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        Parser::new(tokens).parse_program().unwrap()
     }
 
     #[test]
@@ -485,4 +510,43 @@ mod tests {
         let err = typecheck("int a[2] = 5; int main() { return 0; }").unwrap_err();
         assert!(err.message.contains("invalid initializer"), "got: {}", err.message);
     }
+    
+    #[test]
+    fn member_access_types_to_the_field() {
+        let src = "struct P { int x; long y; } ; int main() { struct P p; return p.x; }";
+        let mut program = parse(src);
+        assert!(super::check(&mut program).is_ok());
+    }
+
+    #[test]
+    fn unknown_member_is_an_error() {
+        let src = "struct P { int x; } ; int main() { struct P p; return p.z; }";
+        let mut program = parse(src);
+        let err = super::check(&mut program).unwrap_err();
+        assert!(err.message.contains("no member `z`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn member_of_a_non_struct_is_an_error() {
+        let src = "int main() { int n; return n.x; }";
+        let mut program = parse(src);
+        let err = super::check(&mut program).unwrap_err();
+        assert!(err.message.contains("not a struct"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn arrow_through_a_struct_pointer_types() {
+        let src = "struct P { int x; } ; int get(struct P *p) { return p->x; }";
+        let mut program = parse(src);
+        assert!(super::check(&mut program).is_ok());
+    }
+
+    #[test]
+    fn whole_struct_assignment_type_checks() {
+        let src = "struct P { int x; int y; } ; \
+                   int main() { struct P a; struct P b; b = a; return 0; }";
+        let mut program = parse(src);
+        assert!(super::check(&mut program).is_ok());
+    }
+
 }
