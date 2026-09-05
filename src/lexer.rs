@@ -69,6 +69,11 @@ pub enum Token {
     LogicalAnd,
     LogicalOr,
     // Hashtag, // <- later, for preprocessor directives. commenting to avoid compiler warnings
+    Question,
+    Caret,
+    Pipe,
+    Shl,
+    Shr,
 
     // symbols
     LParen,
@@ -85,6 +90,11 @@ pub enum Token {
     GreaterThan,
     GreaterThanEquals,
     Ampersand,
+    AmpersandEquals,
+    PipeEquals,
+    CaretEquals,
+    ShlEquals,
+    ShrEquals,
     LBracket,
     RBracket,
     Ellipsis,
@@ -140,6 +150,7 @@ impl Token {
             Token::SlashEquals => "`/=`".to_string(),
             Token::ModuloEquals => "`%=`".to_string(),
             Token::LogicalAnd => "`&&`".to_string(),
+            Token::AmpersandEquals => "`&=`".to_string(),
             Token::LogicalOr => "`||`".to_string(),
             Token::LParen => "`(`".to_string(),
             Token::RParen => "`)`".to_string(),
@@ -150,13 +161,22 @@ impl Token {
             Token::Semicolon => "`;`".to_string(),
             Token::Ampersand => "`&`".to_string(),
             Token::Bang => "`!`".to_string(),
+            Token::Pipe => "`|`".to_string(),
+            Token::PipeEquals => "`|=`".to_string(),
+            Token::Question => "`?`".to_string(),
+            Token::Caret => "`^`".to_string(),
+            Token::CaretEquals => "`^=`".to_string(),
             Token::Tilde => "`~`".to_string(),
             Token::Comma => "`,`".to_string(),
             Token::Colon => "`:`".to_string(),
             Token::LessThan => "`<`".to_string(),
             Token::LessThanEquals => "`<=`".to_string(),
+            Token::Shl => "`<<`".to_string(),
+            Token::ShlEquals => "`<<=`".to_string(),
             Token::GreaterThan => "`>`".to_string(),
             Token::GreaterThanEquals => "`>=`".to_string(),
+            Token::Shr => "`>>`".to_string(),
+            Token::ShrEquals => "`>>=`".to_string(),
             Token::EOF => "end of file".to_string(),
         }
     }
@@ -189,6 +209,8 @@ impl Token {
             Token::Minus => "-".to_string(),
             Token::Plus => "+".to_string(),
             Token::Star => "*".to_string(),
+            Token::Caret => "^".to_string(),
+            Token::CaretEquals => "^=".to_string(),
             Token::Slash => "/".to_string(),
             Token::Modulo => "%".to_string(),
             Token::PlusPlus => "++".to_string(),
@@ -202,7 +224,10 @@ impl Token {
             Token::SlashEquals => "/=".to_string(),
             Token::ModuloEquals => "%=".to_string(),
             Token::LogicalAnd => "&&".to_string(),
+            Token::AmpersandEquals => "&=".to_string(),
             Token::LogicalOr => "||".to_string(),
+            Token::Pipe => "|".to_string(),
+            Token::PipeEquals => "|=".to_string(),
             Token::LParen => "(".to_string(),
             Token::RParen => ")".to_string(),
             Token::LBrace => "{".to_string(),
@@ -212,6 +237,7 @@ impl Token {
             Token::Semicolon => ";".to_string(),
             Token::Ampersand => "&".to_string(),
             Token::Bang => "!".to_string(),
+            Token::Question => "?".to_string(),
             Token::Tilde => "~".to_string(),
             Token::Comma => ",".to_string(),
             Token::Dot => ".".to_string(),
@@ -219,8 +245,12 @@ impl Token {
             Token::Colon => ":".to_string(),
             Token::LessThan => "<".to_string(),
             Token::LessThanEquals => "<=".to_string(),
+            Token::Shl => "<<".to_string(),
+            Token::ShlEquals => "<<=".to_string(),
             Token::GreaterThan => ">".to_string(),
             Token::GreaterThanEquals => ">=".to_string(),
+            Token::Shr => ">>".to_string(),
+            Token::ShrEquals => ">>=".to_string(),
             Token::EOF => String::new(),
         }
     }
@@ -410,6 +440,7 @@ impl Lexer {
             Some(']') => { self.advance(); Token::RBracket },
             Some(';') => { self.advance(); Token::Semicolon },
             Some(',') => { self.advance(); Token::Comma },
+            Some('?') => { self.advance(); Token::Question },
             Some('.') => {
                 self.advance();
                 if self.current() == Some('.') {
@@ -485,10 +516,7 @@ impl Lexer {
                     _ => Token::Slash,
                 }
             },
-            Some('#') => {
-                // The preprocessor consumes every directive line before the lexer
-                // sees it, so a `#` reaching here is either a stray one mid-line
-                // or a preprocessor bug. Either way it should be loud.
+            Some('#') => { // The preprocessor consumes every directive line before the lexer sees it
                 self.advance();
                 return Err(CompileError::new(
                     "stray `#` in program",
@@ -522,6 +550,13 @@ impl Lexer {
             Some('<') => { 
                 self.advance();
                 match self.current() {
+                    Some('<') => { 
+                        self.advance(); 
+                        match self.current() {
+                            Some('=') => { self.advance(); Token::ShlEquals },
+                            _ => Token::Shl,
+                        }
+                    },
                     Some('=') => { self.advance(); Token::LessThanEquals },
                     _ => Token::LessThan,
                 } 
@@ -529,30 +564,38 @@ impl Lexer {
             Some('>') => { 
                 self.advance(); 
                 match self.current() {
+                    Some('>') => { 
+                        self.advance(); 
+                        match self.current() {
+                            Some('=') => { self.advance(); Token::ShrEquals },
+                            _ => Token::Shr,
+                        }
+                    },
                     Some('=') => { self.advance(); Token::GreaterThanEquals },
                     _ => Token::GreaterThan,
                 }
             },
+            Some('^') => {
+                self.advance();
+                match self.current() {
+                    Some('=') => { self.advance(); Token::CaretEquals },
+                    _ => Token::Caret,
+                }
+            }
             Some('&') => {
                 self.advance();
-                if self.current() == Some('&') { 
-                    self.advance(); 
-                    Token::LogicalAnd
-                } else {
-                    Token::Ampersand
+                match self.current() {
+                    Some('&') => { self.advance(); Token::LogicalAnd },
+                    Some('=') => { self.advance(); Token::AmpersandEquals },
+                    _ => Token::Ampersand,
                 }
             },
             Some('|') => {
                 self.advance();
-                if self.current() == Some('|') {
-                    self.advance();
-                    Token::LogicalOr
-                } else {
-                    return Err(CompileError::new(
-                        "unexpected character `|`",
-                        Span::in_file(self.file, start, self.position),
-                    )
-                    .with_label("bitwise `|` is not supported yet; did you mean `||`?"));
+                match self.current() {
+                    Some('|') => { self.advance(); Token::LogicalOr },
+                    Some('=') => { self.advance(); Token::PipeEquals },
+                    _ => Token::Pipe,
                 }
             },
             None => Token::EOF,
@@ -871,5 +914,53 @@ mod tests {
             Token::Struct, Token::Ident("Point".into()), Token::EOF,
         ]);
     }
+
+    #[test]
+    fn bitwise_operator_tokens() {
+        assert_eq!(lex("& | ^ << >> ~"), vec![
+            Token::Ampersand, Token::Pipe, Token::Caret,
+            Token::Shl, Token::Shr, Token::Tilde, Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn logical_and_bitwise_and_stay_distinct() {
+        assert_eq!(lex("a && b & c"), vec![
+            Token::Ident("a".into()), Token::LogicalAnd, Token::Ident("b".into()),
+            Token::Ampersand, Token::Ident("c".into()), Token::EOF,
+        ]);
+        assert_eq!(lex("x || y | z"), vec![
+            Token::Ident("x".into()), Token::LogicalOr, Token::Ident("y".into()),
+            Token::Pipe, Token::Ident("z".into()), Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn compound_bitwise_assignment_tokens() {
+        assert_eq!(lex("&= |= ^= <<= >>="), vec![
+            Token::AmpersandEquals, Token::PipeEquals, Token::CaretEquals,
+            Token::ShlEquals, Token::ShrEquals, Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn question_and_colon_tokens() {
+        assert_eq!(lex("a ? b : c"), vec![
+            Token::Ident("a".into()), Token::Question, Token::Ident("b".into()),
+            Token::Colon, Token::Ident("c".into()), Token::EOF,
+        ]);
+    }
+
+    #[test]
+    fn shift_is_not_two_comparisons() {
+        assert_eq!(lex("1 << 2"), vec![
+            Token::IntLiteral(1), Token::Shl, Token::IntLiteral(2), Token::EOF,
+        ]);
+        // a lone '<' is still a comparison
+        assert_eq!(lex("1 < 2"), vec![
+            Token::IntLiteral(1), Token::LessThan, Token::IntLiteral(2), Token::EOF,
+        ]);
+    }
+
 
 }
