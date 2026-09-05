@@ -299,12 +299,20 @@ impl Codegen {
                 let offset: i64 = self.stack_offset;
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
-                    self.gen_expr(expr)?;
-                    if *ty == Type::Bool {
-                        self.normalize_bool();
+                    if let Type::Struct { size, .. } = ty {
+                        let size = *size;
+                        self.gen_lvalue_addr(expr)?;
+                        self.emit("  mov r11, rax");
+                        self.emit(&format!("  lea r10, [rbp - {}]", -offset));
+                        self.emit_struct_copy(size);
+                    } else {
+                        self.gen_expr(expr)?;
+                        if *ty == Type::Bool {
+                            self.normalize_bool();
+                        }
+                        let addr = format!("[rbp - {}]", -offset);
+                        self.emit_store(&addr, "rax", ty.size());
                     }
-                    let addr = format!("[rbp - {}]", -offset);
-                    self.emit_store(&addr, "rax", ty.size());
                 }
             }
             Stmt::While { cond, body } => {
@@ -401,6 +409,27 @@ impl Codegen {
         }
         Ok(())
     }
+
+    /// Copy `size` bytes from `[r11]` to `[r10]`, using `rax` as scratch.
+    /// Unrolled at compile time; `r10` / `r11` / `rax` are caller-clobbered.
+    fn emit_struct_copy(&mut self, size: usize) {
+        let mut done = 0usize;
+        while done < size {
+            let chunk = size - done;
+            let w = if chunk >= 8 { 8 } else if chunk >= 4 { 4 } else if chunk >= 2 { 2 } else { 1 };
+            let (mov, reg) = match w {
+                8 => ("mov", "rax"),
+                4 => ("mov", "eax"),
+                2 => ("mov", "ax"),
+                _ => ("mov", "al"),
+            };
+            let ptr = match w { 8 => "qword ptr", 4 => "dword ptr", 2 => "word ptr", _ => "byte ptr" };
+            self.emit(&format!("  {mov} {reg}, {ptr} [r11 + {done}]"));
+            self.emit(&format!("  {mov} {ptr} [r10 + {done}], {reg}"));
+            done += w;
+        }
+    }
+
 
     /// Yield the base pointer of an indexing target in rax: an array decays to its
     /// address; a pointer yields its value.
@@ -620,16 +649,27 @@ impl Codegen {
             }
 
             Expr::Assign(lval, value) => {
-                self.gen_expr(value)?;
-                if lval.ty == Type::Bool {
-                    self.normalize_bool();
+                if let Type::Struct { size, ..} = &lval.ty {
+                    let size = *size;
+                    self.gen_lvalue_addr(value)?; // rax = src addr
+                    let src_slot = self.spill_rax();
+                    self.gen_lvalue_addr(lval)?; // rax = dst addr
+                    self.reload("r11", src_slot);
+                    self.emit_struct_copy(size);
+                    self.emit("  mov rax, r10")
+
+                } else {
+                    self.gen_expr(value)?;
+                    if lval.ty == Type::Bool {
+                        self.normalize_bool();
+                    }
+                    let value_slot = self.spill_rax();
+                    self.gen_lvalue_addr(lval)?;
+                    self.reload("rcx", value_slot);
+                    self.emit_store("[rax]", "rcx", lval.ty.size());
+                    // An assignment evaluates to the value it stored.
+                    self.emit("  mov rax, rcx");
                 }
-                let value_slot = self.spill_rax();
-                self.gen_lvalue_addr(lval)?;
-                self.reload("rcx", value_slot);
-                self.emit_store("[rax]", "rcx", lval.ty.size());
-                // An assignment evaluates to the value it stored.
-                self.emit("  mov rax, rcx");
             }
 
             Expr::PostIncDec(op, target) => {

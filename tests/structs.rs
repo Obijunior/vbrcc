@@ -84,3 +84,39 @@ int main() {
         None => {}
     }
 }
+
+#[test]
+fn whole_struct_assignment_copies_all_fields() {
+    let src = r#"
+struct P { int x; int y; int z; };
+int main() {
+    struct P a;
+    a.x = 1; a.y = 2; a.z = 3;
+    struct P b;
+    b = a;
+    a.x = 99;                 /* must not affect b */
+    return b.x + b.y + b.z;   /* 6 */
+}
+"#;
+    match compile_and_run(src, "struct_copy_assign") {
+        Some(code) => assert_eq!(code, 6),
+        None => {}
+    }
+}
+
+#[test]
+fn struct_copy_on_initialization() {
+    let src = r#"
+struct P { int x; int y; };
+int main() {
+    struct P a;
+    a.x = 4; a.y = 5;
+    struct P b = a;
+    return b.x + b.y; /* 9 */
+}
+"#;
+    match compile_and_run(src, "struct_copy_init") {
+        Some(code) => assert_eq!(code, 9),
+        None => {}
+    }
+}
