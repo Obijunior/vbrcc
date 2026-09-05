@@ -120,3 +120,119 @@ int main() {
         None => {}
     }
 }
+
+// ---- Task 7: pass by value ------------------------------------------------
+
+#[test]
+fn pass_small_struct_by_value() {
+    let src = r#"
+struct Pair { int a; int b; };   /* 8 bytes -> register */
+int sum(struct Pair p) { return p.a + p.b; }
+int main() {
+    struct Pair p;
+    p.a = 20; p.b = 22;
+    return sum(p); /* 42 */
+}
+"#;
+    match compile_and_run(src, "struct_pass_small") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}
+
+#[test]
+fn pass_large_struct_by_value_is_a_caller_copy() {
+    let src = r#"
+struct Big { int a; int b; int c; int d; };  /* 16 bytes -> memory */
+int total(struct Big b) {
+    b.a = 0;                 /* mutate the callee copy */
+    return b.b + b.c + b.d;
+}
+int main() {
+    struct Big x;
+    x.a = 1; x.b = 2; x.c = 3; x.d = 4;
+    int t = total(x);
+    return t + x.a;          /* 9 + 1 = 10; x.a unchanged proves a copy */
+}
+"#;
+    match compile_and_run(src, "struct_pass_big") {
+        Some(code) => assert_eq!(code, 10),
+        None => {}
+    }
+}
+
+// ---- Task 8: return by value --------------------------------------------
+
+#[test]
+fn return_small_struct_by_value() {
+    let src = r#"
+struct Pair { int a; int b; };
+struct Pair make(int x) { struct Pair p; p.a = x; p.b = x + 1; return p; }
+int main() {
+    struct Pair p = make(20);
+    return p.a + p.b; /* 41 */
+}
+"#;
+    match compile_and_run(src, "struct_ret_small") {
+        Some(code) => assert_eq!(code, 41),
+        None => {}
+    }
+}
+
+#[test]
+fn return_large_struct_by_value() {
+    let src = r#"
+struct Quad { int a; int b; int c; int d; };
+struct Quad make(int base) {
+    struct Quad q;
+    q.a = base; q.b = base + 1; q.c = base + 2; q.d = base + 3;
+    return q;
+}
+int main() {
+    struct Quad q = make(10);
+    return q.a + q.b + q.c + q.d; /* 46 */
+}
+"#;
+    match compile_and_run(src, "struct_ret_large") {
+        Some(code) => assert_eq!(code, 46),
+        None => {}
+    }
+}
+
+#[test]
+fn return_large_struct_then_pass_an_argument() {
+    let src = r#"
+struct Quad { int a; int b; int c; int d; };
+struct Quad shift(struct Quad q, int by) {
+    q.a = q.a + by; q.b = q.b + by; q.c = q.c + by; q.d = q.d + by;
+    return q;
+}
+int main() {
+    struct Quad q; q.a = 1; q.b = 2; q.c = 3; q.d = 4;
+    struct Quad r = shift(q, 10);
+    return r.a + r.b + r.c + r.d; /* 50 */
+}
+"#;
+    match compile_and_run(src, "struct_ret_large_arg") {
+        Some(code) => assert_eq!(code, 50),
+        None => {}
+    }
+}
+
+// ---- Task 9: struct globals ------------------------------------------------
+
+#[test]
+fn zero_initialized_struct_global() {
+    let src = r#"
+struct P { int x; int y; };
+struct P g;
+int main() {
+    g.x = 5; g.y = 9;
+    return g.x + g.y; /* 14 */
+}
+"#;
+    match compile_and_run(src, "struct_global_zero") {
+        Some(code) => assert_eq!(code, 14),
+        None => {}
+    }
+}

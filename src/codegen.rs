@@ -43,6 +43,10 @@ pub struct Codegen {
     globals: HashMap<String, Type>,  // name -> type, addressed as [rip + name]
     stack_offset: i64,
     label_count: usize,
+    /// Frame slot holding the hidden return pointer, for a function whose
+    /// return type is a struct passed in memory. `None` otherwise. Set per
+    /// function in `gen_function`.
+    hidden_ret: Option<i64>,
 }
 
 impl Codegen {
@@ -55,7 +59,24 @@ impl Codegen {
             globals: HashMap::new(),
             stack_offset: 0,
             label_count: 0,
+            hidden_ret: None,
         }
+    }
+
+    /// A struct travels "in memory" — as a hidden pointer to a caller copy —
+    /// when its size is not 1, 2, 4, or 8. Every other type, and a struct of
+    /// one of those sizes, travels in a single integer register.
+    fn abi_is_memory(ty: &Type) -> bool {
+        matches!(ty, Type::Struct { .. }) && !matches!(ty.size(), 1 | 2 | 4 | 8)
+    }
+
+    /// Reserve a fresh frame slot of `size` bytes, aligned to `align`.
+    /// Returns its negative `rbp` offset. Like `spill_rax`, but sized, and
+    /// it emits nothing.
+    fn reserve_slot(&mut self, size: usize, align: usize) -> i64 {
+        self.stack_offset -= size as i64;
+        self.stack_offset = -Codegen::align_up(-self.stack_offset, align.max(1) as i64);
+        self.stack_offset
     }
 
     fn emit(&mut self, line: &str) {
@@ -145,6 +166,13 @@ impl Codegen {
             Some(e) => e,
         };
 
+        if matches!(g.ty, Type::Struct { .. }) {
+            return Err(CompileError::new(
+                "a struct global with an initializer needs brace-initializer support (item 15)",
+                init.span,
+            ));
+        }
+
         match crate::constfold::eval_const(init)? {
             crate::constfold::ConstValue::Int(n) => {
                 if g.ty == Type::Bool {
@@ -222,6 +250,7 @@ impl Codegen {
     fn gen_function(&mut self, func: &Function) -> Result<(), CompileError> {
         self.variables.clear();
         self.stack_offset = 0;
+        self.hidden_ret = None;
 
         // Header + prologue, up to but NOT including the frame reservation.
         self.emit("  .intel_syntax noprefix");
@@ -235,17 +264,46 @@ impl Codegen {
         let outer = std::mem::take(&mut self.output);
 
         let arg_regs = ["rcx", "rdx", "r8", "r9"];
-        for (i, (_ty, param)) in func.params.iter().enumerate() {
-            if i >= arg_regs.len() {
+
+        // A struct return that travels in memory arrives as a hidden pointer
+        // in rcx. The real parameters then start one register later.
+        let mut reg_base = 0usize;
+        if Codegen::abi_is_memory(&func.return_type) {
+            self.stack_offset -= 8;
+            let off = self.stack_offset;
+            self.hidden_ret = Some(off);
+            self.emit(&format!("  mov [rbp - {}], {}", -off, arg_regs[0]));
+            reg_base = 1;
+        }
+
+        for (i, (ty, param)) in func.params.iter().enumerate() {
+            let reg_idx = reg_base + i;
+            if reg_idx >= arg_regs.len() {
                 return Err(CompileError::new(
                     format!("functions with more than {} parameters are not supported", arg_regs.len()),
                     func.span,
                 ));
             }
-            self.stack_offset -= 8;
-            let offset = self.stack_offset;
-            self.variables.insert(param.clone(), offset);
-            self.emit(&format!("  mov [rbp - {}], {}", -offset, arg_regs[i]));
+            let reg = arg_regs[reg_idx];
+            match ty {
+                Type::Struct { size, align, .. } if Codegen::abi_is_memory(ty) => {
+                    // Arrived as a pointer to the caller's copy. Take a local
+                    // copy so the callee owns a normal by-value parameter.
+                    let off = self.reserve_slot(*size, *align);
+                    self.variables.insert(param.clone(), off);
+                    self.emit(&format!("  mov r11, {}", reg));
+                    self.emit(&format!("  lea r10, [rbp - {}]", -off));
+                    self.emit_struct_copy(*size);
+                }
+                _ => {
+                    // A scalar, a pointer, or a 1/2/4/8 struct: store the
+                    // whole register into an 8-byte slot.
+                    self.stack_offset -= 8;
+                    let off = self.stack_offset;
+                    self.variables.insert(param.clone(), off);
+                    self.emit(&format!("  mov [rbp - {}], {}", -off, reg));
+                }
+            }
         }
 
         for stmt in &func.body {
@@ -269,7 +327,24 @@ impl Codegen {
     fn gen_statement(&mut self, stmt: &Spanned<Stmt>) -> Result<(), CompileError> {
         match &stmt.node {
             Stmt::Return(expr) => {
-                self.gen_expr(expr)?;
+                match &expr.ty {
+                    Type::Struct { size, .. } if self.hidden_ret.is_some() => {
+                        let size = *size;
+                        let slot = self.hidden_ret.unwrap();
+                        self.gen_expr(expr)?;          // rax = source address
+                        self.emit("  mov r11, rax");
+                        self.reload("r10", slot);      // r10 = hidden destination
+                        self.emit_struct_copy(size);
+                        self.reload("rax", slot);      // return the pointer
+                    }
+                    Type::Struct { size, .. } => {
+                        self.gen_expr(expr)?;          // rax = source address
+                        self.emit_load("[rax]", *size); // small struct into rax
+                    }
+                    _ => {
+                        self.gen_expr(expr)?;
+                    }
+                }
                 self.emit_epilogue();
             }
             Stmt::For { init, cond, update, body } => {
@@ -301,7 +376,7 @@ impl Codegen {
                 if let Some(expr) = init {
                     if let Type::Struct { size, .. } = ty {
                         let size = *size;
-                        self.gen_lvalue_addr(expr)?;
+                        self.gen_expr(expr)?;   // rax = source address
                         self.emit("  mov r11, rax");
                         self.emit(&format!("  lea r10, [rbp - {}]", -offset));
                         self.emit_struct_copy(size);
@@ -412,20 +487,24 @@ impl Codegen {
 
     /// Copy `size` bytes from `[r11]` to `[r10]`, using `rax` as scratch.
     /// Unrolled at compile time; `r10` / `r11` / `rax` are caller-clobbered.
+    ///
+    /// The assembler has no plain sized load and no 16-bit form, so the load
+    /// side uses the sign-extending `movsxd` / `movsx` for the 4- and 1-byte
+    /// chunks. The matching sized store writes back only those bytes, so the
+    /// sign extension never reaches memory. Chunk sizes are 8, 4, or 1; a
+    /// 2-byte tail falls to two 1-byte moves.
     fn emit_struct_copy(&mut self, size: usize) {
         let mut done = 0usize;
         while done < size {
             let chunk = size - done;
-            let w = if chunk >= 8 { 8 } else if chunk >= 4 { 4 } else if chunk >= 2 { 2 } else { 1 };
-            let (mov, reg) = match w {
-                8 => ("mov", "rax"),
-                4 => ("mov", "eax"),
-                2 => ("mov", "ax"),
-                _ => ("mov", "al"),
-            };
-            let ptr = match w { 8 => "qword ptr", 4 => "dword ptr", 2 => "word ptr", _ => "byte ptr" };
-            self.emit(&format!("  {mov} {reg}, {ptr} [r11 + {done}]"));
-            self.emit(&format!("  {mov} {ptr} [r10 + {done}], {reg}"));
+            let w = if chunk >= 8 { 8 } else if chunk >= 4 { 4 } else { 1 };
+            match w {
+                8 => self.emit(&format!("  mov rax, [r11 + {done}]")),
+                4 => self.emit(&format!("  movsxd rax, dword ptr [r11 + {done}]")),
+                _ => self.emit(&format!("  movsx rax, byte ptr [r11 + {done}]")),
+            }
+            let ptr = match w { 8 => "qword ptr", 4 => "dword ptr", _ => "byte ptr" };
+            self.emit(&format!("  mov {ptr} [r10 + {done}], rax"));
             done += w;
         }
     }
@@ -455,7 +534,18 @@ impl Codegen {
             Expr::FunctionCall {name, args} => {
                 // Win64 passes the first four integer arguments in these registers.
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
-                if args.len() > arg_regs.len() {
+
+                // A struct result that travels in memory needs a caller slot;
+                // its address goes in rcx as a hidden first argument, so the
+                // real arguments start one register later.
+                let ret_mem = Codegen::abi_is_memory(&expr.ty);
+                let ret_slot = match (&expr.ty, ret_mem) {
+                    (Type::Struct { size, align, .. }, true) => Some(self.reserve_slot(*size, *align)),
+                    _ => None,
+                };
+                let reg_base = if ret_mem { 1 } else { 0 };
+
+                if reg_base + args.len() > arg_regs.len() {
                     return Err(CompileError::new(
                         format!("function calls with more than {} arguments are not supported", arg_regs.len()),
                         expr.span,
@@ -465,18 +555,55 @@ impl Codegen {
                 // Evaluate every argument into a frame slot before any register load.
                 let mut slots = Vec::with_capacity(args.len());
                 for arg in args.iter() {
-                    self.gen_expr(arg)?;
-                    slots.push(self.spill_rax());
+                    match &arg.ty {
+                        Type::Struct { size, align, .. } if Codegen::abi_is_memory(&arg.ty) => {
+                            // Copy the struct into a fresh slot; pass its address.
+                            let copy = self.reserve_slot(*size, *align);
+                            self.gen_expr(arg)?;   // rax = source address
+                            self.emit("  mov r11, rax");
+                            self.emit(&format!("  lea r10, [rbp - {}]", -copy));
+                            self.emit_struct_copy(*size);
+                            self.emit(&format!("  lea rax, [rbp - {}]", -copy));
+                            slots.push(self.spill_rax());
+                        }
+                        Type::Struct { size, .. } => {
+                            // 1/2/4/8 bytes: load the whole struct into a register.
+                            self.gen_expr(arg)?;   // rax = source address
+                            self.emit_load("[rax]", *size);
+                            slots.push(self.spill_rax());
+                        }
+                        _ => {
+                            self.gen_expr(arg)?;
+                            slots.push(self.spill_rax());
+                        }
+                    }
                 }
 
                 // Nothing runs between here and the call, so the registers are safe.
+                if let Some(slot) = ret_slot {
+                    self.emit(&format!("  lea {}, [rbp - {}]", arg_regs[0], -slot));
+                }
                 for (i, slot) in slots.iter().enumerate() {
-                    self.reload(arg_regs[i], *slot);
+                    let reg = arg_regs[reg_base + i];
+                    self.reload(reg, *slot);
                     // A variadic callee reads its named arguments from shadow space.
-                    self.emit(&format!("  mov [rsp + {}], {}", i * 8, arg_regs[i]));
+                    self.emit(&format!("  mov [rsp + {}], {}", (reg_base + i) * 8, reg));
                 }
 
                 self.emit(&format!("  call {}", name));
+
+                // Keep the rule that every struct-typed expression leaves an
+                // ADDRESS in rax. A memory return already has one; a register
+                // return holds the bytes, so spill them to a slot.
+                if let Type::Struct { size, align, .. } = &expr.ty {
+                    if ret_mem {
+                        self.emit(&format!("  lea rax, [rbp - {}]", -ret_slot.unwrap()));
+                    } else {
+                        let slot = self.reserve_slot(*size, *align);
+                        self.emit(&format!("  mov [rbp - {}], rax", -slot));
+                        self.emit(&format!("  lea rax, [rbp - {}]", -slot));
+                    }
+                }
             }
 
             Expr::UnaryOp(op, inner) => {
@@ -599,12 +726,13 @@ impl Codegen {
                     CompileError::new(format!("undefined variable `{name}`"), expr.span)
                         .with_label("not found in this scope")
                 })?;
-                let is_array = matches!(expr.ty, Type::Array(_, _));
+                // An array decays to a pointer, and a struct value is carried
+                // by its address, so both leave the address in rax with no load.
+                let aggregate = matches!(expr.ty, Type::Array(_, _) | Type::Struct { .. });
                 match loc {
                     VarLoc::Local(off) => {
                         let addr = format!("[rbp - {}]", -off);
-                        if is_array {
-                            // Array decays to a pointer to its first element.
+                        if aggregate {
                             self.emit(&format!("  lea rax, {addr}"));
                         } else {
                             self.emit_load(&addr, expr.ty.size());
@@ -614,7 +742,7 @@ impl Codegen {
                         // The address first; the assembler has no
                         // `mov reg, [rip + label]`.
                         self.emit(&format!("  lea rax, [rip + {name}]"));
-                        if !is_array {
+                        if !aggregate {
                             self.emit_load("[rax]", expr.ty.size());
                         }
                     }
@@ -627,12 +755,16 @@ impl Codegen {
 
             Expr::Deref(inner) => {
                 self.gen_expr(inner)?;         // rax = pointer
-                self.emit_load("[rax]", expr.ty.size());
+                if !matches!(expr.ty, Type::Array(_, _) | Type::Struct { .. }) {
+                    self.emit_load("[rax]", expr.ty.size());
+                }
             }
 
             Expr::Index(_base, _idx) => {
                 self.gen_lvalue_addr(expr)?;   // rax = element address
-                self.emit_load("[rax]", expr.ty.size());
+                if !matches!(expr.ty, Type::Array(_, _) | Type::Struct { .. }) {
+                    self.emit_load("[rax]", expr.ty.size());
+                }
             }
 
             Expr::Cast(_ty, inner) => {
@@ -651,13 +783,13 @@ impl Codegen {
             Expr::Assign(lval, value) => {
                 if let Type::Struct { size, ..} = &lval.ty {
                     let size = *size;
-                    self.gen_lvalue_addr(value)?; // rax = src addr
+                    self.gen_expr(value)?;        // rax = src addr
                     let src_slot = self.spill_rax();
-                    self.gen_lvalue_addr(lval)?; // rax = dst addr
+                    self.gen_lvalue_addr(lval)?;  // rax = dst addr
+                    self.emit("  mov r10, rax");
                     self.reload("r11", src_slot);
                     self.emit_struct_copy(size);
-                    self.emit("  mov rax, r10")
-
+                    self.emit("  mov rax, r10");  // assignment's value: the dst address
                 } else {
                     self.gen_expr(value)?;
                     if lval.ty == Type::Bool {
