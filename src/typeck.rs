@@ -337,6 +337,9 @@ fn check_expr(
                 }
             }
         }
+        Expr::Ternary(..) => {
+            return Err(CompileError::new("ternary operator not yet implemented", span));
+        }
     };
     expr.ty = ty;
     Ok(())

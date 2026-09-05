@@ -718,6 +718,7 @@ impl Codegen {
                         self.emit("  setge al");
                         self.emit("  movzx rax, al");
                     }
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => return Err(CompileError::new("bitwise codegen not implemented", expr.span)),
                     BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
@@ -825,6 +826,12 @@ impl Codegen {
                 self.reload("rax", addr_slot);
                 self.emit_store("[rax]", "rcx", width);
                 self.reload("rax", old_slot);
+            }
+            Expr::Ternary(..) => {
+                return Err(CompileError::new(
+                    "ternary operator is not yet implemented",
+                    expr.span,
+                ));
             }
         }
         Ok(())

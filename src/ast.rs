@@ -119,6 +119,7 @@ pub enum Expr {
     Cast(Type, Box<TypedExpr>),             // (T)expr
     PostIncDec(IncDec, Box<TypedExpr>),     // expr++ or expr--
     Member(Box<TypedExpr>, String),         // expr.field
+    Ternary(Box<TypedExpr>, Box<TypedExpr>, Box<TypedExpr>), // cond ? then : else
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,7 +149,9 @@ pub enum UnaryOp {
 pub enum BinaryOp {
     Add, Sub, Mul, Div, Mod,
     Lt, Lte, Gt, Gte, Eq, Neq,
-    LogicalAnd, LogicalOr,
+    LogicalAnd, LogicalOr, 
+    BitAnd, BitOr, BitXor,
+    Shl, Shr
 }
 
 #[derive(Debug, Clone, PartialEq)]

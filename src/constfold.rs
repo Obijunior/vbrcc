@@ -52,6 +52,12 @@ pub fn eval_const(e: &TypedExpr) -> Result<ConstValue, CompileError> {
                 BinaryOp::Neq => (a != b) as i64,
                 BinaryOp::LogicalAnd => (a != 0 && b != 0) as i64,
                 BinaryOp::LogicalOr => (a != 0 || b != 0) as i64,
+                _ => {
+                    return Err(CompileError::new(
+                        "unsupported operator in constant expression",
+                        e.span,
+                    ));
+                }
             };
             Ok(ConstValue::Int(value))
         }
