@@ -380,6 +380,20 @@ impl Codegen {
                 self.reload("rax", base_slot);
                 self.emit("  add rax, rcx");
             }
+            Expr::Member(base, field) => {
+                let offset = match &base.ty {
+                    Type::Struct { fields, .. } => fields
+                        .iter()
+                        .find(|f| &f.name == field)
+                        .map(|f| f.offset)
+                        .expect("typeck verified the field exists"),
+                    _ => unreachable!("typeck verified base is a struct"),
+                };
+                self.gen_lvalue_addr(base)?;
+                if offset != 0 {
+                    self.emit(&format!("  add rax, {offset}"));
+                }
+            }
             _ => {
                 return Err(CompileError::new("expression is not an lvalue", expr.span)
                     .with_label("cannot take its address"));
@@ -597,12 +611,12 @@ impl Codegen {
                 self.gen_expr(inner)?;
             }
 
-            Expr::Member(..) => {
-                // TODO(item 10, task 5): offset arithmetic on the member's address.
-                return Err(CompileError::new(
-                    "member access not implemented",
-                    expr.span,
-                ));
+            Expr::Member(_base, _field) => {
+                self.gen_lvalue_addr(expr)?;        // rax = field address
+                let aggregate = matches!(expr.ty, Type::Struct { .. } | Type::Array(_, _));
+                if !aggregate {
+                    self.emit_load("[rax]", expr.ty.size());
+                }
             }
 
             Expr::Assign(lval, value) => {
