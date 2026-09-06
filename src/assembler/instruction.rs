@@ -545,47 +545,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_sete_al() {
-        match parse_intel_line("  sete al").unwrap() {
-            AsmLine::Instruction(Instruction::SeteReg8 { reg }) => {
-                assert_eq!(reg.low3(), 0); // AL
-            }
-            other => panic!("expected SeteReg8, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_setl_al() {
-        match parse_intel_line("  setl al").unwrap() {
-            AsmLine::Instruction(Instruction::SetlReg8 { .. }) => {}
-            other => panic!("expected SetlReg8, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_setne_cl() {
+    fn parse_all_setcc_variants() {
+        use Instruction::*;
+        assert!(matches!(parse_intel_line("sete al").unwrap(),  AsmLine::Instruction(SeteReg8 { .. })));
+        assert!(matches!(parse_intel_line("setne al").unwrap(), AsmLine::Instruction(SetneReg8 { .. })));
+        assert!(matches!(parse_intel_line("setl al").unwrap(),  AsmLine::Instruction(SetlReg8 { .. })));
+        assert!(matches!(parse_intel_line("setg al").unwrap(),  AsmLine::Instruction(SetgReg8 { .. })));
+        assert!(matches!(parse_intel_line("setle al").unwrap(), AsmLine::Instruction(SetleReg8 { .. })));
+        assert!(matches!(parse_intel_line("setge al").unwrap(), AsmLine::Instruction(SetgeReg8 { .. })));
+        // the operand register is decoded, not assumed
         match parse_intel_line("  setne cl").unwrap() {
-            AsmLine::Instruction(Instruction::SetneReg8 { reg }) => {
-                assert_eq!(reg.low3(), 1); // CL
-            }
+            AsmLine::Instruction(SetneReg8 { reg }) => assert_eq!(reg.low3(), 1), // CL
             other => panic!("expected SetneReg8, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn parse_all_setcc_variants() {
-        assert!(matches!(
-            parse_intel_line("setg al").unwrap(),
-            AsmLine::Instruction(Instruction::SetgReg8 { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("setle al").unwrap(),
-            AsmLine::Instruction(Instruction::SetleReg8 { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("setge al").unwrap(),
-            AsmLine::Instruction(Instruction::SetgeReg8 { .. })
-        ));
     }
 
     #[test]
@@ -611,47 +583,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_je_label() {
+    fn parse_all_jcc_variants() {
+        use Instruction::*;
+        assert!(matches!(parse_intel_line("jmp loop_0_start").unwrap(), AsmLine::Instruction(JmpLabel { .. })));
+        assert!(matches!(parse_intel_line("je end").unwrap(),  AsmLine::Instruction(JeLabel { .. })));
+        assert!(matches!(parse_intel_line("jne end").unwrap(), AsmLine::Instruction(JneLabel { .. })));
+        assert!(matches!(parse_intel_line("jl target").unwrap(),  AsmLine::Instruction(JlLabel { .. })));
+        assert!(matches!(parse_intel_line("jle target").unwrap(), AsmLine::Instruction(JleLabel { .. })));
+        assert!(matches!(parse_intel_line("jg target").unwrap(),  AsmLine::Instruction(JgLabel { .. })));
+        assert!(matches!(parse_intel_line("jge target").unwrap(), AsmLine::Instruction(JgeLabel { .. })));
+        // the label text is captured verbatim
         match parse_intel_line("  je loop_0_end").unwrap() {
-            AsmLine::Instruction(Instruction::JeLabel { label }) => {
-                assert_eq!(label, "loop_0_end");
-            }
+            AsmLine::Instruction(JeLabel { label }) => assert_eq!(label, "loop_0_end"),
             other => panic!("expected JeLabel, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn parse_jmp_label() {
-        match parse_intel_line("  jmp loop_0_start").unwrap() {
-            AsmLine::Instruction(Instruction::JmpLabel { label }) => {
-                assert_eq!(label, "loop_0_start");
-            }
-            other => panic!("expected JmpLabel, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_all_jcc_variants() {
-        assert!(matches!(
-            parse_intel_line("jne end").unwrap(),
-            AsmLine::Instruction(Instruction::JneLabel { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("jl target").unwrap(),
-            AsmLine::Instruction(Instruction::JlLabel { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("jle target").unwrap(),
-            AsmLine::Instruction(Instruction::JleLabel { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("jg target").unwrap(),
-            AsmLine::Instruction(Instruction::JgLabel { .. })
-        ));
-        assert!(matches!(
-            parse_intel_line("jge target").unwrap(),
-            AsmLine::Instruction(Instruction::JgeLabel { .. })
-        ));
     }
 
     #[test]

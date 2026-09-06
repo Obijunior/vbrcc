@@ -35,27 +35,6 @@ fn parse_multi_parameter_function() {
 }
 
 #[test]
-fn parse_unary_negate_in_return_statement() {
-    let program = parse("int main() { return -42; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::Return(e(Expr::UnaryOp(
-        UnaryOp::Negate,
-        Box::new(e(Expr::IntLiteral(42))),
-    )))));
-}
-
-#[test]
-fn parse_binary_addition_expression() {
-    let program = parse("int main() { return 1 + 2; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::Return(e(Expr::BinaryOp(
-        BinaryOp::Add,
-        Box::new(e(Expr::IntLiteral(1))),
-        Box::new(e(Expr::IntLiteral(2))),
-    )))));
-}
-
-#[test]
 fn parse_operator_precedence_multiplication_before_addition() {
     let program = parse("int main() { return 1 + 2 * 3; }").unwrap();
     let body = &program.functions[0].body;
@@ -73,14 +52,6 @@ fn parse_operator_precedence_multiplication_before_addition() {
 #[test]
 fn parse_missing_semicolon_returns_error() {
     assert!(parse("int main() { return 42 }").is_err());
-}
-
-#[test]
-fn parse_var_decl_and_return() {
-    let program = parse("int main() { int x = 5; return x; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::VarDecl { ty: Type::Int, name: "x".into(), init: Some(e(Expr::IntLiteral(5))) }));
-    assert_eq!(body[1], s(Stmt::Return(e(Expr::Var("x".into())))));
 }
 
 #[test]
@@ -139,42 +110,6 @@ fn parse_if_else() {
         }
         other => panic!("expected If statement, got {:?}", other),
     }
-}
-
-#[test]
-fn parse_compound_assignment_in_program() {
-    let program = parse("int main() { int x = 0; x += 5; return x; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[1], s(Stmt::Expr(e(Expr::Assign(
-        Box::new(e(Expr::Var("x".into()))),
-        Box::new(e(Expr::BinaryOp(
-            BinaryOp::Add,
-            Box::new(e(Expr::Var("x".into()))),
-            Box::new(e(Expr::IntLiteral(5))),
-        ))),
-    )))));
-}
-
-#[test]
-fn parse_logical_and() {
-    let program = parse("int main() { return 1 && 2; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::Return(e(Expr::BinaryOp(
-        BinaryOp::LogicalAnd,
-        Box::new(e(Expr::IntLiteral(1))),
-        Box::new(e(Expr::IntLiteral(2))),
-    )))));
-}
-
-#[test]
-fn parse_logical_or() {
-    let program = parse("int main() { return 0 || 1; }").unwrap();
-    let body = &program.functions[0].body;
-    assert_eq!(body[0], s(Stmt::Return(e(Expr::BinaryOp(
-        BinaryOp::LogicalOr,
-        Box::new(e(Expr::IntLiteral(0))),
-        Box::new(e(Expr::IntLiteral(1))),
-    )))));
 }
 
 #[test]

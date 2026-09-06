@@ -677,40 +677,20 @@ mod tests {
     use crate::assembler::register::{Register64, Register8};
 
     #[test]
-    fn encode_sete_al() {
-        let instr = Instruction::SeteReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x94, 0xC0]);
-        assert_eq!(encoded_len(&instr), 3);
-    }
-
-    #[test]
-    fn encode_setne_al() {
-        let instr = Instruction::SetneReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x95, 0xC0]);
-    }
-
-    #[test]
-    fn encode_setl_al() {
-        let instr = Instruction::SetlReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x9C, 0xC0]);
-    }
-
-    #[test]
-    fn encode_setg_al() {
-        let instr = Instruction::SetgReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x9F, 0xC0]);
-    }
-
-    #[test]
-    fn encode_setle_al() {
-        let instr = Instruction::SetleReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x9E, 0xC0]);
-    }
-
-    #[test]
-    fn encode_setge_al() {
-        let instr = Instruction::SetgeReg8 { reg: Register8::Al };
-        assert_eq!(encode(&instr), vec![0x0F, 0x9D, 0xC0]);
+    fn each_setcc_encodes_to_its_opcode() {
+        use Register8::Al;
+        // 0F 9x /r, modrm(0b11, 0, al=0) = 0xC0
+        for (instr, opcode) in [
+            (Instruction::SeteReg8  { reg: Al }, 0x94u8),
+            (Instruction::SetneReg8 { reg: Al }, 0x95),
+            (Instruction::SetlReg8  { reg: Al }, 0x9C),
+            (Instruction::SetgReg8  { reg: Al }, 0x9F),
+            (Instruction::SetleReg8 { reg: Al }, 0x9E),
+            (Instruction::SetgeReg8 { reg: Al }, 0x9D),
+        ] {
+            assert_eq!(encode(&instr), vec![0x0F, opcode, 0xC0], "{instr:?}");
+            assert_eq!(encoded_len(&instr), 3, "{instr:?}");
+        }
     }
 
     #[test]

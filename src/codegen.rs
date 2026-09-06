@@ -929,43 +929,18 @@ mod tests {
     }
 
     #[test]
-    fn test_less_than_comparison() {
-        let asm = compile("int main() { return 1 < 2; }");
-        assert!(asm.contains("cmp rax, rcx"));
-        assert!(asm.contains("setl al"));
-        assert!(asm.contains("movzx rax, al"));
-    }
-
-    #[test]
-    fn test_equal_comparison() {
-        let asm = compile("int main() { return 1 == 2; }");
-        assert!(asm.contains("cmp rax, rcx"));
-        assert!(asm.contains("sete al"));
-        assert!(asm.contains("movzx rax, al"));
-    }
-
-    #[test]
-    fn test_not_equal_comparison() {
-        let asm = compile("int main() { return 1 != 2; }");
-        assert!(asm.contains("setne al"));
-    }
-
-    #[test]
-    fn test_less_equal_comparison() {
-        let asm = compile("int main() { return 1 <= 2; }");
-        assert!(asm.contains("setle al"));
-    }
-
-    #[test]
-    fn test_greater_than_comparison() {
-        let asm = compile("int main() { return 1 > 2; }");
-        assert!(asm.contains("setg al"));
-    }
-
-    #[test]
-    fn test_greater_equal_comparison() {
-        let asm = compile("int main() { return 1 >= 2; }");
-        assert!(asm.contains("setge al"));
+    fn each_comparison_operator_emits_its_setcc() {
+        // Same code path (cmp + setCC + movzx); only the condition suffix differs.
+        for (op, setcc) in [
+            ("<", "setl al"), ("<=", "setle al"),
+            (">", "setg al"), (">=", "setge al"),
+            ("==", "sete al"), ("!=", "setne al"),
+        ] {
+            let asm = compile(&format!("int main() {{ return 1 {op} 2; }}"));
+            assert!(asm.contains("cmp rax, rcx"), "{op}:\n{asm}");
+            assert!(asm.contains(setcc), "{op}:\n{asm}");
+            assert!(asm.contains("movzx rax, al"), "{op}:\n{asm}");
+        }
     }
 
     #[test]
@@ -1026,6 +1001,25 @@ mod tests {
         assert!(asm.contains("or_0_true:"));
         assert!(asm.contains("or_0_end:"));
         assert!(!asm.contains("push rax"), "logical OR must not use the evaluate-both-sides pattern");
+    }
+
+    #[test]
+    fn nested_loops_get_distinct_label_numbers() {
+        let asm = compile(
+            "int main() { int s = 0; \
+             for (int i = 0; i < 3; i++) { for (int j = 0; j < 3; j++) { s += 1; } } \
+             return s; }"
+        );
+        assert!(asm.contains("loop_0_start:"), "asm:\n{asm}");
+        assert!(asm.contains("loop_1_start:"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_logical_op_in_an_if_condition_numbers_after_the_if() {
+        // `if` claims the next label id, then the `&&` in its condition claims the one after.
+        let asm = compile("int main() { int x = 5; if (x < 10 && x > 3) { return 1; } return 0; }");
+        assert!(asm.contains("if_0_end:"), "asm:\n{asm}");
+        assert!(asm.contains("and_1_false:"), "asm:\n{asm}");
     }
 
     #[test]

@@ -655,27 +655,21 @@ mod tests {
     }
 
     #[test]
-    fn test_single_number() {
+    fn test_integer_literals() {
         assert_eq!(lex("42"), vec![Token::IntLiteral(42), Token::EOF]);
+        assert_eq!(lex("1234"), vec![Token::IntLiteral(1234), Token::EOF]);
     }
 
     #[test]
-    fn test_keyword_recognition() {
-        assert_eq!(lex("int return"), vec![
-            Token::Int,
-            Token::Return,
+    fn test_keywords_and_identifiers() {
+        // Every keyword the lexer knows tokenizes.
+        assert_eq!(lex("int return for while if else"), vec![
+            Token::Int, Token::Return, Token::For, Token::While, Token::If, Token::Else,
             Token::EOF,
         ]);
-    }
-
-    #[test]
-    fn test_control_flow_keywords() {
-        assert_eq!(lex("for while if else"), vec![
-            Token::For,
-            Token::While,
-            Token::If,
-            Token::Else,
-            Token::EOF,
+        // An identifier that starts with a keyword is read whole, not split.
+        assert_eq!(lex("integer int"), vec![
+            Token::Ident("integer".to_string()), Token::Int, Token::EOF,
         ]);
     }
 
@@ -685,25 +679,11 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_digit_number() {
-        assert_eq!(lex("1234"), vec![Token::IntLiteral(1234), Token::EOF]);
-    }
-
-    #[test]
     fn test_negative_number_tokens() {
         assert_eq!(
             lex("-42"),
             vec![Token::Minus, Token::IntLiteral(42), Token::EOF]
         );
-    }
-
-    #[test]
-    fn test_ident_vs_keyword() {
-        assert_eq!(lex("integer int"), vec![
-            Token::Ident("integer".to_string()),
-            Token::Int,
-            Token::EOF,
-        ]);
     }
 
     #[test]
