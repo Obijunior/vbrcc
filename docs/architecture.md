@@ -236,6 +236,10 @@ The driver connects the assembler to the linker. It has three modes:
 - **Gcc** (`--gcc`) — the system `gcc` assembles and links the `.s` file. This
   mode needs MinGW-w64 GCC.
 
+The driver prints `[ SUCCESS ]` status lines (output path, section sizes) only
+when `main.rs` passes `verbose = true`, which comes from the `--verbose` flag.
+Without the flag a successful build is silent. Errors always print.
+
 ## Diagnostics
 
 **File:** `src/diagnostic.rs`

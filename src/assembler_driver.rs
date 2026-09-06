@@ -40,22 +40,22 @@ pub enum LinkerMode {
     LldLink,    // --lld-link: custom assembler emits .obj, lld-link links
 }
 
-pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode) -> Result<(), String> {
+pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode, verbose: bool) -> Result<(), String> {
     match linker {
         LinkerMode::CustomPe => {
-            assemble_to_pe(asm_path, bin_path)?;
+            assemble_to_pe(asm_path, bin_path, verbose)?;
         }
         LinkerMode::Gcc => {
             assemble_and_link_with_gcc(asm_path, bin_path)?;
         }
         LinkerMode::LldLink => {
-            assemble_and_link_with_lld(asm_path, bin_path)?;
+            assemble_and_link_with_lld(asm_path, bin_path, verbose)?;
         }
     }
     Ok(())
 }
 
-fn assemble_to_pe(asm_path: &Path, out_path: &Path) -> Result<(), String> {
+fn assemble_to_pe(asm_path: &Path, out_path: &Path, verbose: bool) -> Result<(), String> {
     let source = std::fs::read_to_string(asm_path)
         .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
 
@@ -65,10 +65,12 @@ fn assemble_to_pe(asm_path: &Path, out_path: &Path) -> Result<(), String> {
     std::fs::write(out_path, pe)
         .map_err(|e| format!("Failed to write {:?}: {}", out_path, e))?;
 
-    println!("[ SUCCESS ] :: Created Windows Executable: {:?}", out_path);
-    println!("  - .text size: {} bytes", text.len());
-    println!("  - .data size: {} bytes", data.len());
-    println!("  - .idata size: {} bytes", idata.len());
+    if verbose {
+        println!("[ SUCCESS ] :: Created Windows Executable: {:?}", out_path);
+        println!("  - .text size: {} bytes", text.len());
+        println!("  - .data size: {} bytes", data.len());
+        println!("  - .idata size: {} bytes", idata.len());
+    }
     Ok(())
 }
 
@@ -93,7 +95,7 @@ fn assemble_and_link_with_gcc(asm_path: &Path, bin_path: &Path) -> Result<(), St
     Ok(())
 }
 
-fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path) -> Result<(), String> {
+fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path, verbose: bool) -> Result<(), String> {
     let obj_path = asm_path.with_extension("obj");
 
     // Step 1: custom assembler -> COFF .obj
@@ -126,7 +128,9 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path) -> Result<(), St
             .map_err(|e| format!("Failed to write .def: {}", e))?;
     }
 
-    println!("[ SUCCESS ] :: Created COFF object: {:?}", obj_path);
+    if verbose {
+        println!("[ SUCCESS ] :: Created COFF object: {:?}", obj_path);
+    }
 
     // Step 2: if assembler wrote a .def (has external symbols), generate import lib
     if has_externals {

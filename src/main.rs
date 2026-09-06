@@ -56,6 +56,7 @@ fn print_help() {
     println!("    --gcc              Assemble and link using the system gcc");
     println!("    --lld-link         Link using lld-link");
     println!("    --keep-artifacts   Keep intermediate .s / .obj files");
+    println!("    --verbose          Print progress messages (file paths, section sizes)");
     println!("    -E                 Preprocess only; print the expanded source and exit");
     println!("    -I <dir>           Add a directory to the #include search path");
     println!("    -h, --help         Print this help message");
@@ -105,6 +106,7 @@ fn main() {
     let use_gcc = args.iter().any(|a| a == "-gcc" || a == "--gcc");
     let use_lld = args.iter().any(|a| a == "-lld-link" || a == "--lld-link");
     let keep_artifacts = args.iter().any(|a| a == "-keep" || a == "--keep-artifacts");
+    let verbose = args.iter().any(|a| a == "--verbose");
     let preprocess_only = args.iter().any(|a| a == "-E");
     let include_dirs = collect_include_dirs(&args);
     let output_path = args
@@ -196,7 +198,9 @@ fn main() {
         process::exit(1);
     });
 
-    println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
+    if verbose {
+        println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
+    }
 
     // --- Stage 5: Assemble and link ---
     let bin_path = if use_gcc || use_lld {
@@ -216,12 +220,14 @@ fn main() {
         assembler_driver::LinkerMode::CustomPe
     };
 
-    assembler_driver::assemble_and_link(&asm_path, &bin_path, linker).unwrap_or_else(|e| {
+    assembler_driver::assemble_and_link(&asm_path, &bin_path, linker, verbose).unwrap_or_else(|e| {
         eprintln!("[ ERROR ] :: {}", e);
         process::exit(1);
     });
 
-    println!("[ SUCCESS ] :: Compiled binary to {:?}", bin_path);
+    if verbose {
+        println!("[ SUCCESS ] :: Compiled binary to {:?}", bin_path);
+    }
 
     // Clean up intermediate artifacts unless --keep-artifacts is passed
     if !keep_artifacts {

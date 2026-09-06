@@ -36,16 +36,17 @@ cargo build --release
 ## Usage
 
 ```sh
-vbrcc <input.c> [-o <output>] [--lld-link | --gcc] [--keep-artifacts]
+vbrcc <input.c> [-o <output>] [--lld-link | --gcc] [--keep-artifacts] [--verbose]
 vbrcc --version    # or -v
 vbrcc --help       # or -h
 ```
 
-VBRCC compiles one C file. It writes an assembly file and an executable.
+VBRCC compiles one C file. It writes an assembly file and an executable. On
+success it is silent unless you pass `--verbose`.
 
 
 ```console
-$ vbrcc examples/return42.c -o program
+$ vbrcc examples/return42.c -o program --verbose
 [ SUCCESS ] :: Wrote assembly to "program.s"
 [ SUCCESS ] :: Created Windows Executable: "program.exe"
   - .text size: 34 bytes
@@ -62,6 +63,7 @@ $ vbrcc examples/return42.c -o program
 | `--gcc` | Assemble and link with the system `gcc` instead |
 | `--lld-link` | Emit a COFF object and link it with `lld-link` |
 | `--keep-artifacts` | Keep intermediate `.s` / `.obj` files |
+| `--verbose` | Print progress messages (written paths, section sizes); silent otherwise |
 | `-h`, `--help` | Print the option list |
 | `-v`, `--version` | Print version information |
 

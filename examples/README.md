@@ -21,7 +21,7 @@ This is the smallest program the compiler handles. Use it as the first check tha
 build works. It calls nothing, so the output has no import table:
 
 ```console
-$ vbrcc examples/return42.c -o ret
+$ vbrcc examples/return42.c -o ret --verbose
 [ SUCCESS ] :: Wrote assembly to "ret.s"
 [ SUCCESS ] :: Created Windows Executable: "ret.exe"
   - .text size: 34 bytes
