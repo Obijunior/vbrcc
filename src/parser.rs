@@ -486,18 +486,68 @@ impl Parser {
     }
 
     fn parse_logical_and(&mut self) -> Result<TypedExpr, CompileError> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_bit_or()?;
         while let Token::LogicalAnd = self.current() {
             self.advance();
-            let right = self.parse_comparison()?;
+            let right = self.parse_bit_or()?;
             let span = left.span.to(right.span);
             left = TypedExpr::new(Expr::BinaryOp(BinaryOp::LogicalAnd, Box::new(left), Box::new(right)), span);
         }
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<TypedExpr, CompileError> {
+    fn parse_bit_or(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut left = self.parse_bit_xor()?;
+        while self.current() == &Token::Pipe {
+            self.advance();
+            let right = self.parse_bit_xor()?;
+            let span = left.span.to(right.span);
+            left = TypedExpr::new(Expr::BinaryOp(BinaryOp::BitOr, Box::new(left), Box::new(right)), span);
+        }
+        Ok(left)
+    }
+
+    fn parse_bit_xor(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut left = self.parse_bit_and()?;
+        while self.current() == &Token::Caret {
+            self.advance();
+            let right = self.parse_bit_and()?;
+            let span = left.span.to(right.span);
+            left = TypedExpr::new(Expr::BinaryOp(BinaryOp::BitXor, Box::new(left), Box::new(right)), span);
+        }
+        Ok(left)
+    }
+
+    fn parse_bit_and(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut left = self.parse_comparison()?;
+        while self.current() == &Token::Ampersand {
+            self.advance();
+            let right = self.parse_comparison()?;
+            let span = left.span.to(right.span);
+            left = TypedExpr::new(Expr::BinaryOp(BinaryOp::BitAnd, Box::new(left), Box::new(right)), span);
+        }
+        Ok(left)
+    }
+
+    fn parse_shift(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_additive()?;
+        loop {
+            let op = match self.current() {
+                Token::Shl => BinaryOp::Shl,
+                Token::Shr => BinaryOp::Shr,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_additive()?;
+            let span = left.span.to(right.span);
+            left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
+        }
+        Ok(left)
+    }
+
+
+    fn parse_comparison(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut left = self.parse_shift()?;
         loop {
             let op = match self.current() {
                 Token::LessThan => BinaryOp::Lt,
@@ -509,7 +559,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_additive()?;
+            let right = self.parse_shift()?;
             let span = left.span.to(right.span);
             left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
         }
@@ -1304,6 +1354,69 @@ mod tests {
             Type::Struct { tag, fields, .. } => {
                 assert!(tag.is_none());
                 assert_eq!(fields[0].name, "x");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    // Helper: parse a bare expression from a statement.
+    fn expr_of(src: &str) -> Expr {
+        let toks = crate::lexer::Lexer::new(src).tokenize().unwrap();
+        match Parser::new(toks).parse_statement().unwrap().node {
+            Stmt::Expr(e) => e.node,
+            other => panic!("expected Stmt::Expr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitwise_and_binds_tighter_than_xor_and_or() {
+        // a | b ^ c & d  ==  a | (b ^ (c & d))
+        match expr_of("a | b ^ c & d;") {
+            Expr::BinaryOp(BinaryOp::BitOr, _, rhs) => match rhs.node {
+                Expr::BinaryOp(BinaryOp::BitXor, _, r2) => {
+                    assert!(matches!(r2.node, Expr::BinaryOp(BinaryOp::BitAnd, _, _)));
+                }
+                other => panic!("expected BitXor, got {other:?}"),
+            },
+            other => panic!("expected BitOr at the root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn equality_binds_tighter_than_bitwise_and() {
+        // a & b == c  ==  a & (b == c)
+        match expr_of("a & b == c;") {
+            Expr::BinaryOp(BinaryOp::BitAnd, _, rhs) => {
+                assert!(matches!(rhs.node, Expr::BinaryOp(BinaryOp::Eq, _, _)));
+            }
+            other => panic!("expected BitAnd at the root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shift_binds_between_relational_and_additive() {
+        // 1 + 2 << 3  ==  (1 + 2) << 3
+        match expr_of("1 + 2 << 3;") {
+            Expr::BinaryOp(BinaryOp::Shl, lhs, _) => {
+                assert!(matches!(lhs.node, Expr::BinaryOp(BinaryOp::Add, _, _)));
+            }
+            other => panic!("expected Shl at the root, got {other:?}"),
+        }
+        // 1 < 2 << 3  ==  1 < (2 << 3)
+        match expr_of("1 < 2 << 3;") {
+            Expr::BinaryOp(BinaryOp::Lt, _, rhs) => {
+                assert!(matches!(rhs.node, Expr::BinaryOp(BinaryOp::Shl, _, _)));
+            }
+            other => panic!("expected Lt at the root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitwise_is_left_associative() {
+        // a ^ b ^ c  ==  (a ^ b) ^ c
+        match expr_of("a ^ b ^ c;") {
+            Expr::BinaryOp(BinaryOp::BitXor, lhs, _) => {
+                assert!(matches!(lhs.node, Expr::BinaryOp(BinaryOp::BitXor, _, _)));
             }
             other => panic!("got {other:?}"),
         }
