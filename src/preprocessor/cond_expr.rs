@@ -9,9 +9,8 @@
 //!
 //! # Limits
 //!
-//! The bitwise operators `&`, `|`, and `^`, the shifts, `?:`, and the comma operator
-//! are all missing. To add one, add a row to `binding_power` and an arm to
-//! `Eval::apply`.
+//! The comma operator is missing. To add a binary operator, add a row to
+//! `binding_power` and an arm to `Eval::apply`.
 
 use crate::diagnostic::{CompileError, Span};
 use crate::lexer::{SpannedToken, Token};
@@ -46,15 +45,20 @@ struct Eval<'a> {
 }
 
 /// Binding power, lowest first. Every operator here is left-associative.
+/// The ternary `?:` sits below all of these and is handled in `expr`.
 fn binding_power(tok: &Token) -> Option<u8> {
     Some(match tok {
         Token::LogicalOr => 1,
         Token::LogicalAnd => 2,
-        Token::Equals | Token::NotEquals => 3,
+        Token::Pipe => 3,
+        Token::Caret => 4,
+        Token::Ampersand => 5,
+        Token::Equals | Token::NotEquals => 6,
         Token::LessThan | Token::LessThanEquals
-        | Token::GreaterThan | Token::GreaterThanEquals => 4,
-        Token::Plus | Token::Minus => 5,
-        Token::Star | Token::Slash | Token::Modulo => 6,
+        | Token::GreaterThan | Token::GreaterThanEquals => 7,
+        Token::Shl | Token::Shr => 8,
+        Token::Plus | Token::Minus => 9,
+        Token::Star | Token::Slash | Token::Modulo => 10,
         _ => return None,
     })
 }
@@ -99,6 +103,35 @@ impl Eval<'_> {
 
             lhs = self.apply(&op, lhs, rhs, op_pos)?;
         }
+
+        // The ternary binds looser than every operator above and is
+        // right-associative. Recognize it only at the top level (and inside
+        // parens), which is where `expr` is entered with `min_bp == 0`.
+        if min_bp == 0 {
+            if let Some(Token::Question) = self.peek() {
+                self.pos += 1;
+                let cond_true = lhs != 0;
+                let outer_live = self.live;
+
+                self.live = outer_live && cond_true;
+                let then_v = self.expr(0)?;
+
+                match self.peek() {
+                    Some(Token::Colon) => self.pos += 1,
+                    _ => {
+                        self.live = outer_live;
+                        return Err(self.error_at(self.pos, "expected `:` in `?:`".to_string()));
+                    }
+                }
+
+                self.live = outer_live && !cond_true;
+                let else_v = self.expr(0)?;
+
+                self.live = outer_live;
+                lhs = if cond_true { then_v } else { else_v };
+            }
+        }
+
         Ok(lhs)
     }
 
@@ -165,6 +198,11 @@ impl Eval<'_> {
             Token::LessThanEquals => (l <= r) as i64,
             Token::GreaterThan => (l > r) as i64,
             Token::GreaterThanEquals => (l >= r) as i64,
+            Token::Pipe => l | r,
+            Token::Caret => l ^ r,
+            Token::Ampersand => l & r,
+            Token::Shl => l.wrapping_shl(r as u32),
+            Token::Shr => l.wrapping_shr(r as u32), // arithmetic: `l` is i64
             Token::Plus => l.wrapping_add(r),
             Token::Minus => l.wrapping_sub(r),
             Token::Star => l.wrapping_mul(r),
@@ -301,8 +339,40 @@ mod tests {
 
     #[test]
     fn an_unsupported_operator_is_reported_rather_than_ignored() {
-        // `&` lexes, but bitwise and is not implemented here.
-        let err = ev("1 & 2").unwrap_err();
+        // `,` lexes, but the comma operator is not implemented here.
+        let err = ev("1 , 2").unwrap_err();
         assert!(err.message.contains("expected an operator"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn bitwise_and_shift_operators_work() {
+        assert_eq!(ev("(1 << 2) | 2").unwrap(), 6);
+        assert_eq!(ev("6 & 3").unwrap(), 2);
+        assert_eq!(ev("5 ^ 1").unwrap(), 4);
+        assert_eq!(ev("240 & 60").unwrap(), 48);
+        assert_eq!(ev("-8 >> 1").unwrap(), -4); // arithmetic
+    }
+
+    #[test]
+    fn bitwise_precedence_matches_c() {
+        // 1 | 2 & 3  ==  1 | (2 & 3)  ==  3
+        assert_eq!(ev("1 | 2 & 3").unwrap(), 3);
+        // equality binds tighter than `&`
+        assert_eq!(ev("1 & 1 == 1").unwrap(), 1);
+    }
+
+    #[test]
+    fn the_ternary_selects_a_branch() {
+        assert_eq!(ev("1 ? 7 : 8").unwrap(), 7);
+        assert_eq!(ev("0 ? 7 : 8").unwrap(), 8);
+        // right-associative
+        assert_eq!(ev("0 ? 1 : 1 ? 2 : 3").unwrap(), 2);
+        // the untaken branch is not evaluated, so its division by zero is fine
+        assert_eq!(ev("1 ? 5 : 1 / 0").unwrap(), 5);
+    }
+
+    #[test]
+    fn a_ternary_without_a_colon_is_an_error() {
+        assert!(ev("1 ? 2").is_err());
     }
 }

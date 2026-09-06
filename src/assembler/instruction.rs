@@ -54,6 +54,10 @@ pub enum Instruction {
     AndRegImm32 { dst: Register64, imm: i32 },
     XorRegReg { dst: Register64, src: Register64},
     XorRegImm32 { dst: Register64, imm: i32},
+    OrRegReg { dst: Register64, src: Register64 },
+    OrRegImm32 { dst: Register64, imm: i32 },
+    ShlRegCl { reg: Register64 },
+    SarRegCl { reg: Register64 },
     CmpRegReg { dst: Register64, src: Register64 },
     CmpRegImm32 { dst: Register64, imm: i32 },
     NegReg { reg: Register64 },
@@ -389,7 +393,7 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 Ok(AsmLine::Instruction(Instruction::MovRegReg { dst, src }))
             }
         }
-        "add" | "sub" | "and" | "cmp" | "imul" | "xor" => {
+        "add" | "sub" | "and" | "cmp" | "imul" | "xor" | "or" => {
             let (dst, src) = parse_reg_regimm(&operands, raw)?;
             let instr = match (opcode.to_ascii_lowercase().as_str(), src) {
                 ("add", RegOrImm::Reg(src)) => Instruction::AddRegReg { dst, src },
@@ -404,7 +408,24 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
                 ("imul", RegOrImm::Imm(imm)) => Instruction::ImulRegImm32 { dst, imm },
                 ("xor", RegOrImm::Reg(src)) => Instruction::XorRegReg { dst, src },
                 ("xor", RegOrImm::Imm(imm)) => Instruction::XorRegImm32 { dst, imm },
+                ("or", RegOrImm::Reg(src)) => Instruction::OrRegReg { dst, src },
+                ("or", RegOrImm::Imm(imm)) => Instruction::OrRegImm32 { dst, imm },
                 _ => unreachable!(),
+            };
+            Ok(AsmLine::Instruction(instr))
+        }
+        "shl" | "sar" => {
+            if operands.len() != 2 {
+                return Err(format!("[ ERROR ] :: {} expects 2 operands: {}", opcode, raw));
+            }
+            let reg = parse_register64(operands[0])
+                .ok_or_else(|| format!("[ ERROR ] :: invalid register in {}: {}", opcode, raw))?;
+            if operands[1].trim() != "cl" {
+                return Err(format!("[ ERROR ] :: {} count must be cl: {}", opcode, raw));
+            }
+            let instr = match opcode.to_ascii_lowercase().as_str() {
+                "shl" => Instruction::ShlRegCl { reg },
+                _     => Instruction::SarRegCl { reg },
             };
             Ok(AsmLine::Instruction(instr))
         }

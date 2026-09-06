@@ -84,6 +84,10 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::AndRegImm32 { .. } => 7,
         Instruction::XorRegReg { .. } => 3,
         Instruction::XorRegImm32 { .. } => 7,
+        Instruction::OrRegReg { .. } => 3,
+        Instruction::OrRegImm32 { .. } => 7,
+        Instruction::ShlRegCl { .. } => 3,
+        Instruction::SarRegCl { .. } => 3,
         Instruction::ImulRegReg { .. } => 4,
         Instruction::ImulRegImm32 { .. } => 7,
         Instruction::PushReg { reg } => {
@@ -330,6 +334,36 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             let mut out = vec![r, 0x81, m];
             out.extend_from_slice(&imm.to_le_bytes());
             out
+        }
+
+        Instruction::OrRegReg { dst, src } => {
+            // Opcode 0x09 is OR r/m64, r64
+            let r = rex(true, src.ext(), false, dst.ext());
+            let m = modrm(0b11, src.low3(), dst.low3());
+            vec![r, 0x09, m]
+        }
+
+        Instruction::OrRegImm32 { dst, imm } => {
+            // Opcode 0x81 /1 is OR r/m64, imm32 (sign-extended)
+            let r = rex(true, false, false, dst.ext());
+            let m = modrm(0b11, 0b001, dst.low3()); // /1 in reg field
+            let mut out = vec![r, 0x81, m];
+            out.extend_from_slice(&imm.to_le_bytes());
+            out
+        }
+
+        Instruction::ShlRegCl { reg } => {
+            // Opcode 0xD3 /4 is SHL r/m64, CL
+            let r = rex(true, false, false, reg.ext());
+            let m = modrm(0b11, 0b100, reg.low3()); // /4 in reg field
+            vec![r, 0xD3, m]
+        }
+
+        Instruction::SarRegCl { reg } => {
+            // Opcode 0xD3 /7 is SAR r/m64, CL
+            let r = rex(true, false, false, reg.ext());
+            let m = modrm(0b11, 0b111, reg.low3()); // /7 in reg field
+            vec![r, 0xD3, m]
         }
 
         Instruction::PushReg { reg } => {
@@ -805,6 +839,53 @@ mod tests {
         let instr = Instruction::XorRegReg { dst: Register64::Rax, src: Register64::Rax };
         assert_eq!(encode(&instr), vec![0x48, 0x31, 0xC0]);
         assert_eq!(encoded_len(&instr), 3);
+    }
+
+    #[test]
+    fn encode_or_reg_reg() {
+        use Register64::*;
+        // or rax, rcx -> REX.W(0x48) 09 /r  modrm(11, rcx=001, rax=000)=0xC8
+        assert_eq!(encode(&Instruction::OrRegReg { dst: Rax, src: Rcx }), vec![0x48, 0x09, 0xC8]);
+        assert_eq!(encoded_len(&Instruction::OrRegReg { dst: Rax, src: Rcx }), 3);
+    }
+
+    #[test]
+    fn encode_or_reg_imm32() {
+        use Register64::*;
+        // or rax, 1 -> REX.W 81 /1  modrm(11, /1, rax)=0xC8  imm32
+        assert_eq!(
+            encode(&Instruction::OrRegImm32 { dst: Rax, imm: 1 }),
+            vec![0x48, 0x81, 0xC8, 0x01, 0x00, 0x00, 0x00],
+        );
+        assert_eq!(encoded_len(&Instruction::OrRegImm32 { dst: Rax, imm: 1 }), 7);
+    }
+
+    #[test]
+    fn encode_shl_and_sar_by_cl() {
+        use Register64::*;
+        // shl rax, cl -> REX.W D3 /4  modrm(11, /4, rax)=0xE0
+        assert_eq!(encode(&Instruction::ShlRegCl { reg: Rax }), vec![0x48, 0xD3, 0xE0]);
+        // sar rax, cl -> REX.W D3 /7  modrm(11, /7, rax)=0xF8
+        assert_eq!(encode(&Instruction::SarRegCl { reg: Rax }), vec![0x48, 0xD3, 0xF8]);
+        assert_eq!(encoded_len(&Instruction::ShlRegCl { reg: Rax }), 3);
+    }
+
+    #[test]
+    fn parses_or_and_shifts() {
+        use crate::assembler::instruction::{parse_intel_line, AsmLine, Instruction as I};
+        assert!(matches!(
+            parse_intel_line("  or rax, rcx"),
+            Ok(AsmLine::Instruction(I::OrRegReg { .. }))
+        ));
+        assert!(matches!(
+            parse_intel_line("  shl rax, cl"),
+            Ok(AsmLine::Instruction(I::ShlRegCl { .. }))
+        ));
+        assert!(matches!(
+            parse_intel_line("  sar rax, cl"),
+            Ok(AsmLine::Instruction(I::SarRegCl { .. }))
+        ));
+        assert!(parse_intel_line("  shl rax, rcx").is_err()); // count must be cl
     }
 
     #[test]

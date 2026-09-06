@@ -220,6 +220,20 @@ fn check_expr(
         Expr::BinaryOp(op, l, r) => {
             check_expr(l, scope, sigs)?;
             check_expr(r, scope, sigs)?;
+            if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                          | BinaryOp::Shl | BinaryOp::Shr)
+            {
+                let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long);
+                if !is_int(&l.ty) || !is_int(&r.ty) {
+                    return Err(CompileError::new(
+                        format!(
+                            "a bitwise operator needs integer operands, not `{}` and `{}`",
+                            l.ty.describe(), r.ty.describe()
+                        ),
+                        span,
+                    ));
+                }
+            }
             let lt = l.ty.decay();
             if matches!(lt, Type::Pointer(_)) && matches!(op, BinaryOp::Add | BinaryOp::Sub) {
                 lt
@@ -337,8 +351,18 @@ fn check_expr(
                 }
             }
         }
-        Expr::Ternary(..) => {
-            return Err(CompileError::new("ternary operator not yet implemented", span));
+        Expr::Ternary(cond, then_e, else_e) => {
+            check_expr(cond, scope, sigs)?;
+            check_expr(then_e, scope, sigs)?;
+            check_expr(else_e, scope, sigs)?;
+            let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long);
+            if then_e.ty == else_e.ty {
+                then_e.ty.clone()
+            } else if is_int(&then_e.ty) && is_int(&else_e.ty) {
+                Type::Int
+            } else {
+                then_e.ty.clone()
+            }
         }
     };
     expr.ty = ty;
@@ -550,6 +574,43 @@ mod tests {
                    int main() { struct P a; struct P b; b = a; return 0; }";
         let mut program = parse(src);
         assert!(super::check(&mut program).is_ok());
+    }
+
+    #[test]
+    fn bitwise_on_ints_is_int() {
+        let program = typecheck("int main() { int a = 6; int b = 3; return a & b; }").unwrap();
+        match &program.functions[0].body[2].node {
+            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitwise_on_a_pointer_is_an_error() {
+        let err = typecheck("int main() { int x; int *p = &x; return p & 1; }").unwrap_err();
+        assert!(err.message.contains("bitwise"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn ternary_of_two_ints_is_int() {
+        let program = typecheck("int main() { int a = 1; return a ? 2 : 3; }").unwrap();
+        match &program.functions[0].body[1].node {
+            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ternary_of_two_pointers_keeps_the_pointer_type() {
+        let program = typecheck(
+            "int main() { int x; int y; int *p = &x; int *q = &y; int *r = (1 ? p : q); return 0; }"
+        ).unwrap();
+        match &program.functions[0].body[4].node {
+            Stmt::VarDecl { init: Some(e), .. } => {
+                assert_eq!(e.ty, Type::Pointer(Box::new(Type::Int)));
+            }
+            other => panic!("got {other:?}"),
+        }
     }
 
 }

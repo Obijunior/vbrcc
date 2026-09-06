@@ -52,14 +52,16 @@ pub fn eval_const(e: &TypedExpr) -> Result<ConstValue, CompileError> {
                 BinaryOp::Neq => (a != b) as i64,
                 BinaryOp::LogicalAnd => (a != 0 && b != 0) as i64,
                 BinaryOp::LogicalOr => (a != 0 || b != 0) as i64,
-                _ => {
-                    return Err(CompileError::new(
-                        "unsupported operator in constant expression",
-                        e.span,
-                    ));
-                }
+                BinaryOp::BitAnd => a & b,
+                BinaryOp::BitOr => a | b,
+                BinaryOp::BitXor => a ^ b,
+                BinaryOp::Shl => a.wrapping_shl(b as u32),
+                BinaryOp::Shr => a.wrapping_shr(b as u32), // arithmetic: `a` is i64
             };
             Ok(ConstValue::Int(value))
+        }
+        Expr::Ternary(cond, then_e, else_e) => {
+            if eval_int(cond)? != 0 { eval_const(then_e) } else { eval_const(else_e) }
         }
         _ => Err(CompileError::new(
             "initializer element is not a constant",
@@ -135,5 +137,19 @@ mod tests {
             eval_const(program.globals[0].init.as_ref().unwrap()).unwrap(),
             ConstValue::Bytes(vec![b'h', b'i', 0]),
         );
+    }
+
+    #[test]
+    fn folds_bitwise_and_shift() {
+        assert_eq!(fold("(1 << 0) | (1 << 3)").unwrap(), ConstValue::Int(9));
+        assert_eq!(fold("240 & 60").unwrap(), ConstValue::Int(48));
+        assert_eq!(fold("5 ^ 1").unwrap(), ConstValue::Int(4));
+        assert_eq!(fold("-8 >> 1").unwrap(), ConstValue::Int(-4)); // arithmetic
+    }
+
+    #[test]
+    fn folds_a_ternary() {
+        assert_eq!(fold("1 ? 7 : 8").unwrap(), ConstValue::Int(7));
+        assert_eq!(fold("0 ? 7 : 8").unwrap(), ConstValue::Int(8));
     }
 }

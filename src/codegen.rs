@@ -718,7 +718,12 @@ impl Codegen {
                         self.emit("  setge al");
                         self.emit("  movzx rax, al");
                     }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => return Err(CompileError::new("bitwise codegen not implemented", expr.span)),
+                    BinaryOp::BitAnd => self.emit("  and rax, rcx"),
+                    BinaryOp::BitOr  => self.emit("  or rax, rcx"),
+                    BinaryOp::BitXor => self.emit("  xor rax, rcx"),
+                    // The shift count is the right operand, already in rcx; `cl` is its low byte.
+                    BinaryOp::Shl    => self.emit("  shl rax, cl"),
+                    BinaryOp::Shr    => self.emit("  sar rax, cl"),
                     BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
@@ -827,11 +832,17 @@ impl Codegen {
                 self.emit_store("[rax]", "rcx", width);
                 self.reload("rax", old_slot);
             }
-            Expr::Ternary(..) => {
-                return Err(CompileError::new(
-                    "ternary operator is not yet implemented",
-                    expr.span,
-                ));
+            Expr::Ternary(cond, then_e, else_e) => {
+                let id = self.label_count;
+                self.label_count += 1;
+                self.gen_expr(cond)?;
+                self.emit("  cmp rax, 0");
+                self.emit(&format!("  je ternary_{}_else", id));
+                self.gen_expr(then_e)?;
+                self.emit(&format!("  jmp ternary_{}_end", id));
+                self.emit(&format!("ternary_{}_else:", id));
+                self.gen_expr(else_e)?;
+                self.emit(&format!("ternary_{}_end:", id));
             }
         }
         Ok(())

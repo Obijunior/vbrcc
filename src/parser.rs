@@ -440,7 +440,7 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Result<TypedExpr, CompileError> {
-        let lhs = self.parse_logical_or()?;
+        let lhs = self.parse_ternary()?;
         let start_span = lhs.span;
 
         // postfix ++ / --
@@ -458,6 +458,11 @@ impl Parser {
             Token::StarEquals => Some(Some(BinaryOp::Mul)),
             Token::SlashEquals => Some(Some(BinaryOp::Div)),
             Token::ModuloEquals => Some(Some(BinaryOp::Mod)),
+            Token::AmpersandEquals => Some(Some(BinaryOp::BitAnd)),
+            Token::PipeEquals => Some(Some(BinaryOp::BitOr)),
+            Token::CaretEquals => Some(Some(BinaryOp::BitXor)),
+            Token::ShlEquals => Some(Some(BinaryOp::Shl)),
+            Token::ShrEquals => Some(Some(BinaryOp::Shr)),
             _ => None,
         };
         let Some(assign_op) = assign_op else { return Ok(lhs); };
@@ -769,6 +774,23 @@ impl Parser {
 
         self.parse_postfix()
     }
+
+    fn parse_ternary(&mut self) -> Result<TypedExpr, CompileError> {
+        let cond = self.parse_logical_or()?;
+        if self.current() != &Token::Question {
+            return Ok(cond);
+        }
+        self.advance(); // '?'
+        let then_branch = self.parse_expr()?;      // a full expression sits between ? and :
+        self.expect(&Token::Colon)?;
+        let else_branch = self.parse_ternary()?;   // right-associative
+        let span = cond.span.to(else_branch.span);
+        Ok(TypedExpr::new(
+            Expr::Ternary(Box::new(cond), Box::new(then_branch), Box::new(else_branch)),
+            span,
+        ))
+    }
+
 
     fn parse_postfix(&mut self) -> Result<TypedExpr, CompileError> {
         let mut expr = self.parse_primary()?;
@@ -1421,6 +1443,59 @@ mod tests {
             other => panic!("got {other:?}"),
         }
     }
+
+    #[test]
+    fn parse_simple_ternary() {
+        match expr_of("a ? b : c;") {
+            Expr::Ternary(c, t, e) => {
+                assert!(matches!(c.node, Expr::Var(ref n) if n == "a"));
+                assert!(matches!(t.node, Expr::Var(ref n) if n == "b"));
+                assert!(matches!(e.node, Expr::Var(ref n) if n == "c"));
+            }
+            other => panic!("expected Ternary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ternary_is_right_associative() {
+        // a ? b : c ? d : e  ==  a ? b : (c ? d : e)
+        match expr_of("a ? b : c ? d : e;") {
+            Expr::Ternary(_, _, els) => {
+                assert!(matches!(els.node, Expr::Ternary(_, _, _)));
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ternary_binds_looser_than_logical_or() {
+        // a || b ? c : d  ==  (a || b) ? c : d
+        match expr_of("a || b ? c : d;") {
+            Expr::Ternary(c, _, _) => {
+                assert!(matches!(c.node, Expr::BinaryOp(BinaryOp::LogicalOr, _, _)));
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compound_bitwise_assignment_desugars() {
+        // x |= 1  ==  x = x | 1
+        match expr_of("x |= 1;") {
+            Expr::Assign(lhs, value) => {
+                assert!(matches!(lhs.node, Expr::Var(ref n) if n == "x"));
+                match value.node {
+                    Expr::BinaryOp(BinaryOp::BitOr, l, r) => {
+                        assert!(matches!(l.node, Expr::Var(ref n) if n == "x"));
+                        assert!(matches!(r.node, Expr::IntLiteral(1)));
+                    }
+                    other => panic!("expected BitOr value, got {other:?}"),
+                }
+            }
+            other => panic!("expected Assign, got {other:?}"),
+        }
+    }
+
 
 
 }
