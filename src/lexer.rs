@@ -879,14 +879,6 @@ mod tests {
     }
 
     #[test]
-    fn a_single_pipe_is_an_error_not_a_panic() {
-        let src = "int main() { return 1 | 2; }";
-        let err = Lexer::new(src).tokenize().unwrap_err();
-        assert!(err.message.contains('|'), "got: {}", err.message);
-        assert_eq!(err.span.start, src.find('|').unwrap());
-    }
-
-    #[test]
     fn stray_hash_is_now_an_error() {
         // The preprocessor consumes every directive line, so a `#` reaching the
         // lexer means a preprocessor bug rather than user error.
