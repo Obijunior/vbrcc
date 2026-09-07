@@ -137,16 +137,25 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 | Character literals | `'a'`, `'\0'`, `'\n'` |
 | Variables | `x`, `sum` |
 | Arithmetic | `a + b`, `a - b`, `a * b`, `a / b`, `a % b`, `-a` |
-| Bitwise NOT | `~a` |
+| Bitwise | `a & b`, `a \| b`, `a ^ b`, `~a` |
+| Shifts | `a << b`, `a >> b` |
 | Logical NOT | `!a` |
 | Comparison | `<`, `<=`, `>`, `>=`, `==`, `!=` |
+| Ternary conditional | `cond ? a : b` |
 | Assignment | `x = 5` |
-| Compound assignment | `+=`, `-=`, `*=`, `/=`, `%=` |
+| Compound assignment | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
 | Post-increment/decrement | `i++`, `i--` |
 | Function calls | `printf("hello")` |
 | Address-of / dereference | `&x`, `*p` |
 | Array index | `a[i]` |
+| Struct member access | `s.x`, `p->x` |
 | Cast | `(char)x`, `(int *)p` |
+
+> **Four arguments is the limit.** This applies to a function's parameter list and to a
+> call's argument list. Win64 passes the first four in registers. VBRCC does not write
+> stack arguments yet, because the code generator never moves `rsp` after the prologue.
+> A struct returned in memory uses one of the four slots, so such a call takes at most
+> three arguments.
 
 ### Types
 
@@ -161,7 +170,15 @@ example a dereference of a value that is not a pointer.
 | Void type | `void`, `void *` |
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
-| Type aliases | `typedef long size_t;`, `typedef char *cstring;` |
+| Structs | `struct Point { int x, y; };` |
+| Type aliases | `typedef long size_t;`, `typedef struct { int x, y; } Point;` |
+
+> **A struct is a value.** Member access reads and writes at a computed offset. A whole
+> struct copies on assignment and on initialization. A struct passes to a function and
+> returns from one by value. A struct passes in a register only when its size is exactly
+> 1, 2, 4, or 8 bytes. Every other size passes and returns through memory, per the Win64
+> convention. A self-referential struct, a bitfield, and a braced struct initializer do
+> not work yet.
 
 > **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`, a
 > pointer, and `void *` are 8. A local occupies its true size on the stack, aligned to
@@ -180,21 +197,32 @@ example a dereference of a value that is not a pointer.
 | :--- | :--- |
 | Return | `return expr;` |
 | Variable declaration | `int x = 0;`, `char c;`, `int *p;`, `int a[10];` |
+| Several names in one declaration | `int a, b = 5;`, `char c, *p, buf[8];` |
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
 | If / else | `if (cond) { ... } else { ... }` |
 | Single-statement bodies | `while (c) x++;`, `if (c) return 1;` |
 | Logical AND / OR | `&&`, `\|\|` |
-| Line comments | `// single-line comment` |
+| Comments | `// line comment`, `/* block comment */` |
+
+> **A `*` binds to one name.** In `int *a, b;` only `a` is a pointer. `b` is an `int`.
+> A `for` initializer still takes one name, so `for (int i = 0, n = 5; ...)` is an error.
 
 ### Not yet supported
 
-* `struct`, `union`, and `enum`
+* `union` and `enum`
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
-* The bitwise operators `&`, `|`, `^`, `<<`, and `>>`
+* `sizeof`
+* The comma operator, and pre-increment and pre-decrement (`++i`, `--i`)
+* The storage-class and function specifiers `static`, `extern`, `inline`, and `register`
+* Initializer lists, such as `int a[3] = {1, 2, 3};`, and designated initializers
+* More than four function parameters or call arguments
+* Integer promotion and the usual arithmetic conversions
 * Block-level scope. Every variable shares one flat scope for each function
+* A self-referential `struct`, a bitfield, and a braced `struct` initializer
 * `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`
+* Imports from more than one DLL in the default backend. Use `--lld-link`
 
 ## Preprocessor
 
@@ -245,11 +273,16 @@ The built-in assembler (`src/assembler/`) accepts a small subset of Intel-syntax
   - `push <reg>`, `pop <reg>`
   - `neg <reg>`, `not <reg>`, `idiv <reg>`
   - `mov <reg>, <reg>` / `mov <reg>, <imm64>` / `mov <reg>, [reg +/- disp]` / `mov [reg +/- disp], <reg>`
+  - `mov byte ptr [reg +/- disp], <reg>` and `mov dword ptr [reg +/- disp], <reg>`
+    (narrow stores)
   - `movzx <reg64>, <reg8>`
+  - `movsx <reg64>, byte ptr [reg +/- disp]` and
+    `movsxd <reg64>, dword ptr [reg +/- disp]` (sign-extending narrow loads)
   - `add <reg>, <reg|imm32>`, `sub <reg>, <reg|imm32>`
   - `imul <reg>, <reg|imm32>`
-  - `and <reg>, <reg|imm32>`, `cmp <reg>, <reg|imm32>`
-  - `xor <reg>, <reg|imm32>`
+  - `and <reg>, <reg|imm32>`, `or <reg>, <reg|imm32>`, `xor <reg>, <reg|imm32>`
+  - `cmp <reg>, <reg|imm32>`
+  - `shl <reg>, cl`, `sar <reg>, cl` (variable shift count in `cl`)
   - `sete`, `setne`, `setl`, `setle`, `setg`, `setge` (8-bit register operand)
   - `jmp`, `je`, `jne`, `jl`, `jle`, `jg`, `jge` (label operand)
   - `lea <reg>, [rip + label]` / `lea <reg>, [reg +/- disp]`
@@ -308,14 +341,21 @@ cargo test
 - A built-in PE import table: single-DLL libc calls (`printf` and friends via `msvcrt.dll`)
   run through the default backend with no `--lld-link`
 - `typedef`
+- The bitwise operators `&`, `|`, `^`, `<<`, `>>`, and their compound assignments
+- The ternary conditional operator `?:`
+- `struct`: member access, whole-struct copy, pass and return by value, and globals
+- Several names in one declaration, such as `int a, b = 5;`
 
 **Next**
 
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
-- `struct`, `union`, and `enum`
-- More control flow: `switch`, `do-while`, `break`, `continue`
+- More control flow: `do-while`, `break`, `continue`, `switch`
+- Initializer lists and designated initializers
+- `union` and `enum`
+- More than four function parameters or call arguments
+- `sizeof`
+- `unsigned` integer types
 - Preprocessor: `#` stringizing, `##` pasting, `__VA_ARGS__`
-- More than four call arguments
 - Block-level scope
 
 **Later**
