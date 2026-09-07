@@ -236,3 +236,71 @@ int main() {
         None => {}
     }
 }
+
+// ---- declarator lists: `int a, b;` -----------------------------------------
+
+/// Members sharing one base type must land at the same offsets as members
+/// written on separate lines. Exit code proves the offsets, not just the AST.
+#[test]
+fn comma_separated_struct_members_read_back() {
+    let src = r#"
+struct V { int f, t, p; };
+int main() {
+    struct V v;
+    v.f = 11; v.t = 20; v.p = 11;
+    return v.f + v.t + v.p; /* 42 */
+}
+"#;
+    match compile_and_run(src, "decl_list_struct_members") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}
+
+/// A `*` binds to its own declarator: `p` is a pointer, `n` is an int.
+#[test]
+fn a_star_binds_to_one_declarator_at_runtime() {
+    let src = r#"
+int main() {
+    int n = 42;
+    int *p, m;
+    p = &n;
+    m = *p;
+    return m;
+}
+"#;
+    match compile_and_run(src, "decl_list_star_binding") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}
+
+#[test]
+fn comma_separated_globals_read_back() {
+    let src = r#"
+int a, b = 40;
+int main() {
+    a = 2;
+    return a + b; /* 42 */
+}
+"#;
+    match compile_and_run(src, "decl_list_globals") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}
+
+#[test]
+fn comma_separated_locals_read_back() {
+    let src = r#"
+int main() {
+    int i = 40, j = 2, k;
+    k = i + j;
+    return k; /* 42 */
+}
+"#;
+    match compile_and_run(src, "decl_list_locals") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}

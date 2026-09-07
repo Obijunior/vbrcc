@@ -40,7 +40,8 @@ pub struct Parser {
 enum TopLevel {
     Function(Function),
     Decl(FuncDecl),
-    Global(GlobalVar),
+    /// One declaration may declare several globals: `int a, b = 5;`.
+    Global(Vec<GlobalVar>),
 }
 
 impl Parser {
@@ -156,7 +157,7 @@ impl Parser {
                     match self.parse_declarator_tail(start, ty)? {
                         TopLevel::Function(f) => functions.push(f),
                         TopLevel::Decl(d) => decls.push(d),
-                        TopLevel::Global(g) => globals.push(g),
+                        TopLevel::Global(g) => globals.extend(g),
                     }
                     continue;
                 }
@@ -165,7 +166,7 @@ impl Parser {
             match self.parse_top_level()? {
                 TopLevel::Function(f) => functions.push(f),
                 TopLevel::Decl(d) => decls.push(d),
-                TopLevel::Global(g) => globals.push(g),
+                TopLevel::Global(g) => globals.extend(g),
             }
         }
         Ok(Program { functions, decls, globals })
@@ -182,7 +183,7 @@ impl Parser {
             self.advance(); // consume '{'
             let mut stmts = Vec::new();
             while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-                stmts.push(self.parse_statement()?);
+                self.parse_statement_into(&mut stmts)?;
             }
             self.expect(&Token::RBrace)?;
             return Ok(stmts);
@@ -191,7 +192,24 @@ impl Parser {
         return Ok(vec![self.parse_statement()?]);
     }
 
-    fn parse_type(&mut self) -> Result<Type, CompileError> {
+    /// One statement, appended to `out`. A declaration may add more than one
+    /// [`Stmt::VarDecl`], so this appends instead of returning one statement.
+    fn parse_statement_into(&mut self, out: &mut Vec<Spanned<Stmt>>) -> Result<(), CompileError> {
+        if self.is_type_start(self.current()) {
+            out.extend(self.parse_decl()?);
+            return Ok(());
+        }
+        out.push(self.parse_statement()?);
+        Ok(())
+    }
+
+    /// The declaration specifiers: `const`, then `struct { ... }`, a type
+    /// keyword, or a typedef name. Stops at the first `*`.
+    ///
+    /// A `*` belongs to the declarator, not to the specifiers. In `int *a, b;`
+    /// only `a` is a pointer. A declarator list therefore reads the base type
+    /// once here, then calls [`Parser::parse_pointer_suffix`] for each name.
+    fn parse_base_type(&mut self) -> Result<Type, CompileError> {
         // `const` carries nothing this compiler acts on. Accept it and drop it,
         // so a header written for a real compiler still parses.
         while self.current() == &Token::Const {
@@ -199,16 +217,10 @@ impl Parser {
         }
         let span = self.current_span();
         if self.current() == &Token::Struct {
-            let mut ty = self.parse_struct_type()?;
-            loop {
-                if self.current() == &Token::Star { self.advance(); ty = Type::Pointer(Box::new(ty)); }
-                else if self.current() == &Token::Const { self.advance(); }
-                else { break; }
-            }
-            return Ok(ty);
+            return self.parse_struct_type();
         }
 
-        let mut ty = match self.advance().clone() {
+        let ty = match self.advance().clone() {
             Token::Int => Type::Int,
             Token::Char => Type::Char,
             Token::Bool => Type::Bool,
@@ -229,6 +241,12 @@ impl Parser {
                 .with_label("expected `int`, `char`, `long`, or `void`"));
             }
         };
+        Ok(ty)
+    }
+
+    /// The `*`s one declarator adds to the base type, and any `const` between
+    /// them. This cannot fail, so it returns a `Type` and not a `Result`.
+    fn parse_pointer_suffix(&mut self, mut ty: Type) -> Type {
         loop {
             if self.current() == &Token::Star {
                 self.advance();
@@ -236,18 +254,46 @@ impl Parser {
             } else if self.current() == &Token::Const {
                 self.advance();
             } else {
-                break;
+                return ty;
             }
         }
-        Ok(ty)
+    }
+
+    /// The `[N]` after a declarator name, or `base` unchanged when no `[`
+    /// follows. A global that writes `[]` needs the length from its
+    /// initializer, so [`Parser::parse_global_tail`] does not use this.
+    fn parse_array_suffix(&mut self, base: Type) -> Result<Type, CompileError> {
+        if self.current() != &Token::LBracket {
+            return Ok(base);
+        }
+        self.advance(); // '['
+        let len = match self.advance().clone() {
+            Token::IntLiteral(n) if n >= 0 => n as usize,
+            other => {
+                return Err(CompileError::new(
+                    format!("expected array length, found {}", other.describe()),
+                    self.previous_span(),
+                ));
+            }
+        };
+        self.expect(&Token::RBracket)?;
+        Ok(Type::Array(Box::new(base), len))
+    }
+
+    /// One complete type: specifiers plus one declarator's pointer suffix.
+    /// Correct where exactly one declarator can appear, which is casts,
+    /// parameters, and typedefs.
+    fn parse_type(&mut self) -> Result<Type, CompileError> {
+        let base = self.parse_base_type()?;
+        Ok(self.parse_pointer_suffix(base))
     }
 
     /// One top-level item. A prototype and a definition share a head, so both
     /// are parsed here and told apart by the token after the parameter list.
     fn parse_top_level(&mut self) -> Result<TopLevel, CompileError> {
         let start = self.current_span();
-        let return_type = self.parse_type()?;
-        self.parse_declarator_tail(start, return_type)
+        let base = self.parse_base_type()?;
+        self.parse_declarator_tail(start, base)
     }
 
     /// The rest of a top-level item once its type is already in hand: a
@@ -255,7 +301,11 @@ impl Parser {
     /// Shared by `parse_top_level` (the common case) and `parse_program`'s
     /// struct branch, where the type was a `struct T { ... }` definition
     /// parsed directly rather than through `parse_type`.
-    fn parse_declarator_tail(&mut self, start: Span, return_type: Type) -> Result<TopLevel, CompileError> {
+    fn parse_declarator_tail(&mut self, start: Span, base_type: Type) -> Result<TopLevel, CompileError> {
+        // `base_type` is the shared specifier type. The `*`s belong to this
+        // declarator alone, so a later name in the same declaration starts
+        // again from `base_type`.
+        let return_type = self.parse_pointer_suffix(base_type.clone());
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
             other => {
@@ -267,7 +317,7 @@ impl Parser {
         };
 
         if self.current() != &Token::LParen {
-            return self.parse_global_tail(start, return_type, name);
+            return self.parse_global_tail(start, base_type, return_type, name);
         }
 
         self.expect(&Token::LParen)?;
@@ -291,7 +341,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.current() != &Token::RBrace && self.current() != &Token::EOF {
-            body.push(self.parse_statement()?);
+            self.parse_statement_into(&mut body)?;
         }
         self.expect(&Token::RBrace)?;
 
@@ -300,57 +350,84 @@ impl Parser {
     }
 
 
-    /// The tail of a top-level declaration once a `(` is ruled out.
-    /// `[ '[' N? ']' ] [ '=' initializer ] ';'`.
-    fn parse_global_tail(&mut self, start: Span, base_type: Type, name: String) -> Result<TopLevel, CompileError> {
-        let mut ty = base_type;
-        let mut unsized_array = false;
+    /// The tail of a top-level declaration once a `(` is ruled out. Reads the
+    /// rest of the init-declarator list:
+    /// `[ '[' N? ']' ] [ '=' initializer ] { ',' declarator }* ';'`.
+    ///
+    /// `base_type` is the shared specifier type, used to restart each later
+    /// declarator. `ty` and `name` are the first declarator, which
+    /// [`Parser::parse_declarator_tail`] already read to rule out a `(`.
+    fn parse_global_tail(
+        &mut self,
+        start: Span,
+        base_type: Type,
+        ty: Type,
+        name: String,
+    ) -> Result<TopLevel, CompileError> {
+        let mut globals = Vec::new();
+        let mut decl_start = start;
+        let mut ty = ty;
+        let mut name = name;
 
-        if self.current() == &Token::LBracket {
-            self.advance(); // '['
-            if self.current() == &Token::RBracket {
-                unsized_array = true;
-                ty = Type::Array(Box::new(ty), 0);
+        loop {
+            let mut unsized_array = false;
+            if self.current() == &Token::LBracket {
+                self.advance(); // '['
+                if self.current() == &Token::RBracket {
+                    unsized_array = true;
+                    ty = Type::Array(Box::new(ty), 0);
+                } else {
+                    let len = match self.advance().clone() {
+                        Token::IntLiteral(n) if n >= 0 => n as usize,
+                        other => {
+                            return Err(CompileError::new(
+                                format!("expected array length, found {}", other.describe()),
+                                self.previous_span(),
+                            ));
+                        }
+                    };
+                    ty = Type::Array(Box::new(ty), len);
+                }
+                self.expect(&Token::RBracket)?;
+            }
+
+            let init = if self.current() == &Token::Assign {
+                self.advance(); // '='
+                if self.current() == &Token::LBrace {
+                    return Err(CompileError::new(
+                        "initializer lists for globals are not supported yet",
+                        self.current_span(),
+                    )
+                    .with_label("use a scalar constant or a string literal"));
+                }
+                Some(self.parse_expr()?)
             } else {
-                let len = match self.advance().clone() {
-                    Token::IntLiteral(n) if n >= 0 => n as usize,
-                    other => {
-                        return Err(CompileError::new(
-                            format!("expected array length, found {}", other.describe()),
-                            self.previous_span(),
-                        ));
-                    }
-                };
-                ty = Type::Array(Box::new(ty), len);
-            }
-            self.expect(&Token::RBracket)?;
-        }
+                None
+            };
 
-        let init = if self.current() == &Token::Assign {
-            self.advance(); // '='
-            if self.current() == &Token::LBrace {
+            // Each declarator stands alone: `int a[] = "x", b[];` rejects only `b`.
+            if unsized_array && init.is_none() {
                 return Err(CompileError::new(
-                    "initializer lists for globals are not supported yet",
-                    self.current_span(),
+                    "array size missing",
+                    decl_start.to(self.previous_span()),
                 )
-                .with_label("use a scalar constant or a string literal"));
+                .with_label("an unsized array needs a string initializer"));
             }
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
 
-        if unsized_array && init.is_none() {
-            return Err(CompileError::new(
-                "array size missing",
-                start.to(self.previous_span()),
-            )
-            .with_label("an unsized array needs a string initializer"));
+            let span = decl_start.to(self.previous_span());
+            globals.push(GlobalVar { ty, name, init, span });
+
+            if self.current() != &Token::Comma {
+                break;
+            }
+            self.advance(); // ','
+            decl_start = self.current_span();
+            ty = self.parse_pointer_suffix(base_type.clone());
+            name = self.expect_ident("a variable name")?;
         }
 
         self.expect(&Token::Semicolon)?;
-        let span = start.to(self.previous_span());
-        Ok(TopLevel::Global(GlobalVar {ty, name, init, span}))
+        Ok(TopLevel::Global(globals))
     }
 
     /// Parameters between `(` and `)`, with the `)` left unconsumed.
@@ -414,7 +491,19 @@ impl Parser {
                 Stmt::Return(expr)
             }
 
-            tok if self.is_type_start(&tok) => return self.parse_decl(),
+            // Reached from a brace-less body and from a `for` initializer,
+            // neither of which has anywhere to put a second declarator.
+            tok if self.is_type_start(&tok) => {
+                let mut decls = self.parse_decl()?;
+                if decls.len() > 1 {
+                    return Err(CompileError::new(
+                        "a declaration with several names is not supported here",
+                        decls[1].span,
+                    )
+                    .with_label("declare one name at a time in a `for` initializer"));
+                }
+                return Ok(decls.remove(0));
+            }
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
             Token::If => return self.parse_if(),
@@ -696,42 +785,42 @@ impl Parser {
         Ok(Spanned::new(Stmt::If { cond, then_branch, else_branch }, start.to(self.previous_span())))
     }
 
-    fn parse_decl(&mut self) -> Result<Spanned<Stmt>, CompileError> {
-        let start = self.current_span();
-        let base = self.parse_type()?;
-        let name = match self.advance().clone() {
-            Token::Ident(s) => s,
-            other => {
-                return Err(CompileError::new(
-                    format!("expected variable name, found {}", other.describe()),
-                    self.previous_span(),
-                ));
-            }
-        };
-        let ty = if self.current() == &Token::LBracket {
-            self.advance();
-            let len = match self.advance().clone() {
-                Token::IntLiteral(n) if n >= 0 => n as usize,
-                other => {
-                    return Err(CompileError::new(
-                        format!("expected array length, found {}", other.describe()),
-                        self.previous_span(),
-                    ));
-                }
+    /// A local declaration, which may name several variables:
+    /// `type declarator [ '=' init ] { ',' declarator [ '=' init ] }* ';'`.
+    ///
+    /// Returns one [`Stmt::VarDecl`] per declarator, which the caller splices
+    /// into the enclosing statement list. Scope is flat, so a spliced sibling
+    /// statement and a second declarator mean the same thing to the type
+    /// checker.
+    fn parse_decl(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+        let mut decl_start = self.current_span();
+        let base = self.parse_base_type()?;
+        let mut out = Vec::new();
+
+        loop {
+            let ty = self.parse_pointer_suffix(base.clone());
+            let name = self.expect_ident("a variable name")?;
+            let ty = self.parse_array_suffix(ty)?;
+            let init = if self.current() == &Token::Assign {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
             };
-            self.expect(&Token::RBracket)?;
-            Type::Array(Box::new(base), len)
-        } else {
-            base
-        };
-        let init = if self.current() == &Token::Assign {
-            self.advance();
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
+            out.push(Spanned::new(
+                Stmt::VarDecl { ty, name, init },
+                decl_start.to(self.previous_span()),
+            ));
+
+            if self.current() != &Token::Comma {
+                break;
+            }
+            self.advance(); // ','
+            decl_start = self.current_span();
+        }
+
         self.expect(&Token::Semicolon)?;
-        Ok(Spanned::new(Stmt::VarDecl { ty, name, init }, start.to(self.previous_span())))
+        Ok(out)
     }
 
     fn parse_unary(&mut self) -> Result<TypedExpr, CompileError> {
@@ -884,29 +973,20 @@ impl Parser {
         self.advance(); // '{'
         let mut members: Vec<(Type, String)> = Vec::new();
         while self.current() != &Token::RBrace {
-            let mty = self.parse_type()?;
-            let mname = match self.advance().clone() {
-                Token::Ident(s) => s,
-                other => return Err(CompileError::new(
-                    format!("expected a member name, found {}", other.describe()),
-                    self.previous_span(),
-                )),
-            };
-            // one `[N]` on a member is allowed (reuse parse_array_dims if present)
-            let mty = if self.current() == &Token::LBracket {
-                self.advance();
-                let n = match self.advance().clone() {
-                    Token::IntLiteral(n) if n >= 0 => n as usize,
-                    other => return Err(CompileError::new(
-                        format!("expected array length, found {}", other.describe()),
-                        self.previous_span(),
-                    )),
-                };
-                self.expect(&Token::RBracket)?;
-                Type::Array(Box::new(mty), n)
-            } else { mty };
+            // One line of members shares a base type but each name carries its
+            // own `*`s and `[N]`: `int a, *p, r[4];`.
+            let base = self.parse_base_type()?;
+            loop {
+                let mty = self.parse_pointer_suffix(base.clone());
+                let mname = self.expect_ident("a member name")?;
+                let mty = self.parse_array_suffix(mty)?;
+                members.push((mty, mname));
+                if self.current() != &Token::Comma {
+                    break;
+                }
+                self.advance(); // ','
+            }
             self.expect(&Token::Semicolon)?;
-            members.push((mty, mname));
         }
         self.expect(&Token::RBrace)?;
 
@@ -1293,6 +1373,126 @@ mod tests {
     fn an_unsized_global_array_without_initializer_is_rejected() {
         let err = parse_src("int a[];\nint main() { return 0; }").unwrap_err();
         assert!(err.message.contains("array size"), "got: {}", err.message);
+    }
+
+    // --- declarator lists: `int a, b;` ---
+
+    /// The seam the whole declarator-list feature rests on: the specifiers stop
+    /// at the `*`, so each declarator can add its own pointer depth.
+    #[test]
+    fn a_base_type_stops_at_the_star() {
+        let mut p = parser(vec![
+            Token::Int, Token::Star, Token::Ident("p".into()), Token::Semicolon, Token::EOF,
+        ]);
+        assert_eq!(p.parse_base_type().unwrap(), Type::Int);
+        assert_eq!(p.current(), &Token::Star);
+    }
+
+    #[test]
+    fn struct_members_may_share_one_base_type() {
+        let p = parse_src("struct V { int f, t, p; } v;").unwrap();
+        match &p.globals[0].ty {
+            Type::Struct { fields, size, .. } => {
+                assert_eq!(fields.len(), 3);
+                assert_eq!(
+                    fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+                    ["f", "t", "p"],
+                );
+                assert_eq!(
+                    fields.iter().map(|f| f.offset).collect::<Vec<_>>(),
+                    [0, 4, 8],
+                );
+                assert_eq!(*size, 12);
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    /// `char c, *p, n;` gives one pointer and two chars, not three pointers.
+    #[test]
+    fn a_star_binds_to_its_own_struct_member() {
+        let p = parse_src("struct S { char c, *p, n; } s;").unwrap();
+        match &p.globals[0].ty {
+            Type::Struct { fields, .. } => {
+                assert_eq!(fields[0].ty, Type::Char);
+                assert_eq!(fields[1].ty, Type::Pointer(Box::new(Type::Char)));
+                assert_eq!(fields[2].ty, Type::Char);
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_struct_member_list_mixes_arrays_and_scalars() {
+        let p = parse_src("struct L { int m[4], c; } l;").unwrap();
+        match &p.globals[0].ty {
+            Type::Struct { fields, .. } => {
+                assert_eq!(fields[0].ty, Type::Array(Box::new(Type::Int), 4));
+                assert_eq!(fields[1].ty, Type::Int);
+                assert_eq!(fields[1].offset, 16);
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_global_declaration_may_name_several_variables() {
+        let p = parse_src("int a, b = 5;\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals.len(), 2);
+        assert_eq!(p.globals[0].name, "a");
+        assert!(p.globals[0].init.is_none());
+        assert_eq!(p.globals[1].name, "b");
+        assert!(p.globals[1].init.is_some());
+    }
+
+    #[test]
+    fn a_star_binds_to_its_own_global_declarator() {
+        let p = parse_src("int *a, b;\nint main() { return 0; }").unwrap();
+        assert_eq!(p.globals[0].ty, Type::Pointer(Box::new(Type::Int)));
+        assert_eq!(p.globals[1].ty, Type::Int);
+    }
+
+    /// The unsized-array check is per declarator, so only `b` is at fault.
+    #[test]
+    fn each_global_declarator_needs_its_own_array_size() {
+        let err = parse_src("char a[] = \"hi\", b[];\nint main() { return 0; }").unwrap_err();
+        assert!(err.message.contains("array size"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_local_declaration_may_name_several_variables() {
+        let p = parse_src("int main() { int i = 0, n; return i; }").unwrap();
+        let body = &p.functions[0].body;
+        assert!(
+            matches!(&body[0].node, Stmt::VarDecl { name, init: Some(_), .. } if name == "i"),
+            "got {:?}", body[0].node,
+        );
+        assert!(
+            matches!(&body[1].node, Stmt::VarDecl { name, init: None, .. } if name == "n"),
+            "got {:?}", body[1].node,
+        );
+        assert!(matches!(body[2].node, Stmt::Return(_)));
+    }
+
+    #[test]
+    fn a_star_binds_to_its_own_local_declarator() {
+        let p = parse_src("int main() { int *a, b; return b; }").unwrap();
+        match &p.functions[0].body[0].node {
+            Stmt::VarDecl { ty, .. } => assert_eq!(*ty, Type::Pointer(Box::new(Type::Int))),
+            other => panic!("got {other:?}"),
+        }
+        match &p.functions[0].body[1].node {
+            Stmt::VarDecl { ty, .. } => assert_eq!(*ty, Type::Int),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    /// `Stmt::For` holds a single init statement, so a list has nowhere to go.
+    #[test]
+    fn a_for_initializer_rejects_several_names() {
+        let err = parse_src("int main() { for (int i = 0, n = 5; i < n; i++) { } return 0; }")
+            .unwrap_err();
+        assert!(err.message.contains("several names"), "got: {}", err.message);
     }
 
     #[test]
