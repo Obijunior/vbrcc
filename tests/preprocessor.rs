@@ -56,8 +56,8 @@ fn compile_and_run(src: &str, base: &str) -> Option<i32> {
     out_base.push(base);
     std::fs::write(&c_path, src).unwrap();
 
-    let status = Command::new("cargo")
-        .args(["run", "--quiet", "--", c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
+    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
+        .args([c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
         .status()
         .unwrap();
     if !status.success() {
@@ -213,9 +213,8 @@ fn binary_accepts_a_search_directory() {
     out_base.push("pp_dash_i");
     std::fs::write(&c_path, "#include <answer.h>\nint main() { return ANSWER; }\n").unwrap();
 
-    let status = Command::new("cargo")
+    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
         .args([
-            "run", "--quiet", "--",
             c_path.to_str().unwrap(),
             "-I", dir.to_str().unwrap(),
             "-o", out_base.to_str().unwrap(),
@@ -288,8 +287,8 @@ fn binary_rejects_a_call_that_contradicts_its_prototype() {
     std::fs::write(&c_path, "int add(int a, int b) { return a + b; }\nint main() { return add(1); }\n")
         .unwrap();
 
-    let out = Command::new("cargo")
-        .args(["run", "--quiet", "--", c_path.to_str().unwrap()])
+    let out = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
+        .args([c_path.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(!out.status.success(), "the wrong argument count must not compile");

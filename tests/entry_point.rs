@@ -20,8 +20,8 @@ fn compile_and_run(src: &str, base: &str) -> Option<i32> {
     out_base.push(base);
     std::fs::write(&c_path, src).unwrap();
 
-    let status = Command::new("cargo")
-        .args(["run", "--quiet", "--", c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
+    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
+        .args([c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
         .status()
         .unwrap();
     if !status.success() {

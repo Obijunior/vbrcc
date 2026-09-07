@@ -51,12 +51,12 @@ fn compile(c_src: &str, base: &str, extra_flags: &[&str]) -> Result<PathBuf, Box
 
     File::create(&c_path)?.write_all(c_src.as_bytes())?;
 
-    let mut args: Vec<&str> = vec!["run", "--", c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()];
+    let mut args: Vec<&str> = vec![c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()];
     args.extend_from_slice(extra_flags);
 
-    let status = Command::new("cargo").args(&args).status()?;
+    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc")).args(&args).status()?;
     if !status.success() {
-        return Err(format!("compiler (cargo run {:?}) failed: {}", extra_flags, status).into());
+        return Err(format!("compiler ({:?}) failed: {}", extra_flags, status).into());
     }
 
     // No-extension output gets `.exe` in the lld-link/PE path; fall back to bare name.

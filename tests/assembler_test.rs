@@ -152,12 +152,12 @@ fn test_full_pipeline_c_to_executable() -> Result<(), Box<dyn std::error::Error>
 
     File::create(&c_path)?.write_all(c_src.as_bytes())?;
 
-    let status = Command::new("cargo")
-        .args(&["run", "--", c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
+    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
+        .args(&[c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
         .status()?;
 
     if !status.success() {
-        return Err(format!("full pipeline (cargo run) failed: {}", status).into());
+        return Err(format!("full pipeline failed: {}", status).into());
     }
 
     // On Windows the produced binary may have .exe
