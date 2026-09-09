@@ -26,6 +26,7 @@ pub enum Type {
     Char,
     Bool,
     Long,
+    LongLong,
     Void,
     Pointer(Box<Type>),
     Array(Box<Type>, usize),
@@ -37,9 +38,9 @@ impl Type {
     pub fn size(&self) -> usize {
         match self {
             Type::Char => 1,
-            Type::Int => 4,
+            Type::Int | Type::Long => 4,
             Type::Bool => 1,
-            Type::Long | Type::Pointer(_) | Type::Void => 8,
+            Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
             Type::Struct { size, .. } => *size,
             Type::Unknown => 8,
@@ -49,9 +50,9 @@ impl Type {
     pub fn align(&self) -> usize {
         match self {
             Type::Char => 1,
-            Type::Int => 4,
+            Type::Int | Type::Long => 4,
             Type::Bool => 1,
-            Type::Long | Type::Pointer(_) | Type::Void => 8,
+            Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
             Type::Struct { align, .. } => *align,
             Type::Unknown => 8,
@@ -79,6 +80,7 @@ impl Type {
             Type::Char => "char".to_string(),
             Type::Bool => "_Bool".to_string(),
             Type::Long => "long".to_string(),
+            Type::LongLong => "long long".to_string(),
             Type::Void => "void".to_string(),
             Type::Pointer(t) => format!("{}*", t.describe()),
             Type::Array(t, n) => format!("{}[{}]", t.describe(), n),
@@ -227,7 +229,8 @@ mod tests {
         assert_eq!(Type::Int.size(), 4);
         assert_eq!(Type::Char.size(), 1);
         assert_eq!(Type::Bool.size(), 1);
-        assert_eq!(Type::Long.size(), 8);
+        assert_eq!(Type::Long.size(), 4);
+        assert_eq!(Type::LongLong.size(), 8);
         assert_eq!(Type::Pointer(Box::new(Type::Int)).size(), 8);
     }
 

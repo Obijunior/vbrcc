@@ -4,8 +4,8 @@
 typedef char int8_t;
 typedef int  int16_t;
 typedef int  int32_t;
-typedef long int64_t;
-typedef long intptr_t;
+typedef long long int64_t;
+typedef long long intptr_t;
 
 #define INT8_MAX 127
 #define INT16_MAX 32767

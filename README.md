@@ -165,13 +165,13 @@ example a dereference of a value that is not a pointer.
 
 | Feature | Example |
 | --- | --- |
-| Integer types | `int`, `char`, `long` |
+| Integer types | `int`, `char`, `long`, `long long` |
 | Boolean type | `_Bool`, `bool` (via `<stdbool.h>`) |
 | Void type | `void`, `void *` |
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
 | Structs | `struct Point { int x, y; };` |
-| Type aliases | `typedef long size_t;`, `typedef struct { int x, y; } Point;` |
+| Type aliases | `typedef long long size_t;`, `typedef struct { int x, y; } Point;` |
 
 > **A struct is a value.** Member access reads and writes at a computed offset. A whole
 > struct copies on assignment and on initialization. A struct passes to a function and
@@ -180,8 +180,9 @@ example a dereference of a value that is not a pointer.
 > convention. A self-referential struct, a bitfield, and a braced struct initializer do
 > not work yet.
 
-> **Type sizes are the real C widths.** `char` is 1 byte, `int` is 4, and `long`, a
-> pointer, and `void *` are 8. A local occupies its true size on the stack, aligned to
+> **Type sizes follow the Windows LLP64 model.** `char` is 1 byte, `int` and `long`
+> are 4, and `long long`, a pointer, and `void *` are 8. This matches MSVC and
+> MinGW-w64, so a `long` crossing into `msvcrt` has the width the callee expects. A local occupies its true size on the stack, aligned to
 > its type. Array elements pack at element size. A narrow load sign-extends with `movsx`
 > or `movsxd`, and a store writes exactly the width of the value. `Type::size` and
 > `Type::align` in `src/ast.rs` are the one place that decides this.
@@ -241,7 +242,7 @@ example a dereference of a value that is not a pointer.
 A small header set ships inside the binary, so an install needs no data files:
 `limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, and `stdlib.h`.
 They are small on purpose. Each one uses `typedef` and a macro where a language feature
-is still missing. For example, `size_t` is `typedef`'d to `long` in `stddef.h`, but
+is still missing. For example, `size_t` is `typedef`'d to `long long` in `stddef.h`, but
 `bool` is still a macro for `_Bool` since `stdbool.h`'s job is only to spell the keyword
 the way C99 expects.
 

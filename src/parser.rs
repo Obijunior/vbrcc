@@ -224,7 +224,15 @@ impl Parser {
             Token::Int => Type::Int,
             Token::Char => Type::Char,
             Token::Bool => Type::Bool,
-            Token::Long => Type::Long,
+            // `long long` is one type, spelled with two tokens.
+            Token::Long => {
+                if self.current() == &Token::Long {
+                    self.advance();
+                    Type::LongLong
+                } else {
+                    Type::Long
+                }
+            }
             Token::Void => Type::Void,
             Token::Ident(name) => match self.typedefs.get(&name) {
                 Some(t) => t.clone(),
