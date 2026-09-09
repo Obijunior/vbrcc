@@ -142,8 +142,8 @@ The type checker also finds these errors:
 The type checker keeps a scope. The scope is a map from a name to a `Type`. The
 scope is flat. The type checker does not use a separate scope for each block yet.
 
-The `Type` enum holds the type kinds: `Int`, `Char`, `Long`, `Void`, a `Pointer`
-to a type, and an `Array` of a type and a length. The `Type::size` method and the
+The `Type` enum holds the type kinds: `Int`, `Char`, `Long`, `LongLong`, `Void`,
+`Enum`, a `Pointer` to a type, and an `Array` of a type and a length. The `Type::size` method and the
 `Type::align` method give the size and the alignment of a type. These two methods
 are the single place that controls sizes. A later phase can change the sizes in
 one place.

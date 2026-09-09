@@ -41,6 +41,7 @@ pub enum Token {
     Void,
     Typedef,
     Struct,
+    Enum,
 
     // keywords
     Return,
@@ -123,6 +124,7 @@ impl Token {
             Token::Long => "`long`".to_string(),
             Token::Void => "`void`".to_string(),
             Token::Struct => "`struct`".to_string(),
+            Token::Enum => "`enum`".to_string(),
             Token::Typedef => "`typedef`".to_string(),
             Token::Bool => "`_Bool`".to_string(),
             Token::Return => "`return`".to_string(),
@@ -199,6 +201,7 @@ impl Token {
             Token::Bool => "_Bool".to_string(),
             Token::Typedef => "typedef".to_string(),
             Token::Struct => "struct".to_string(),
+            Token::Enum => "enum".to_string(),
             Token::Return => "return".to_string(),
             Token::For => "for".to_string(),
             Token::While => "while".to_string(),
@@ -418,6 +421,7 @@ impl Lexer {
             "else" => Token::Else,
             "const" => Token::Const,
             "_Bool" => Token::Bool,
+            "enum" => Token::Enum,
             "typedef" => Token::Typedef,
             "struct" => Token::Struct,
             _ => Token::Ident(ident),

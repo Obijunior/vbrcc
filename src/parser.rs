@@ -34,6 +34,11 @@ pub struct Parser {
     pos: usize,
     typedefs: HashMap<String, Type>,
     structs: HashMap<String, Type>,
+    enums: HashMap<String, Type>,
+    /// Every enumerator seen so far, with its value. An enumeration constant
+    /// has type `int` in C, so the parser substitutes the value at each use and
+    /// no later stage ever sees the name.
+    enum_constants: HashMap<String, i64>,
 }
 
 /// What one top-level item turned out to be.
@@ -46,7 +51,11 @@ enum TopLevel {
 
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
-        Parser { tokens, pos: 0, typedefs: HashMap::new(), structs: HashMap::new() }
+        Parser {
+            tokens, pos: 0,
+            typedefs: HashMap::new(), structs: HashMap::new(),
+            enums: HashMap::new(), enum_constants: HashMap::new(),
+        }
     }
 
     // --- Token navigation ---
@@ -140,6 +149,26 @@ impl Parser {
                 self.parse_typedef()?;
                 continue;
             }
+            if self.current() == &Token::Enum {
+                // `enum E { ... };` may stand alone or carry a declarator after
+                // the closing brace, exactly like a struct definition.
+                let looks_like_def = self.peek() == &Token::LBrace
+                    || (matches!(self.peek(), Token::Ident(_)) && self.peek2() == &Token::LBrace);
+                if looks_like_def {
+                    let start = self.current_span();
+                    let ty = self.parse_enum_type()?;   // registers the constants
+                    if self.current() == &Token::Semicolon {
+                        self.advance();
+                        continue;
+                    }
+                    match self.parse_declarator_tail(start, ty)? {
+                        TopLevel::Function(f) => functions.push(f),
+                        TopLevel::Decl(d) => decls.push(d),
+                        TopLevel::Global(g) => globals.extend(g),
+                    }
+                    continue;
+                }
+            }
             if self.current() == &Token::Struct {
                 // A `{`-bodied struct type here is a definition. It may stand
                 // alone (`struct T { ... };`) or carry a declarator right
@@ -173,7 +202,7 @@ impl Parser {
     }
 
     fn is_type_start(&self, tok: &Token) -> bool {
-        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const | Token::Struct)
+        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const | Token::Struct | Token::Enum)
             || matches!(tok, Token::Ident(name) if self.typedefs.contains_key(name))
     }
 
@@ -218,6 +247,9 @@ impl Parser {
         let span = self.current_span();
         if self.current() == &Token::Struct {
             return self.parse_struct_type();
+        }
+        if self.current() == &Token::Enum {
+            return self.parse_enum_type();
         }
 
         let ty = match self.advance().clone() {
@@ -275,8 +307,19 @@ impl Parser {
             return Ok(base);
         }
         self.advance(); // '['
-        let len = match self.advance().clone() {
-            Token::IntLiteral(n) if n >= 0 => n as usize,
+        let tok = self.advance().clone();
+        let len = match &tok {
+            Token::IntLiteral(n) if *n >= 0 => *n as usize,
+            // `int a[MAX];` where MAX is an enumerator.
+            Token::Ident(name) => match self.enum_constants.get(name) {
+                Some(&value) if value >= 0 => value as usize,
+                _ => {
+                    return Err(CompileError::new(
+                        format!("expected array length, found {}", tok.describe()),
+                        self.previous_span(),
+                    ));
+                }
+            },
             other => {
                 return Err(CompileError::new(
                     format!("expected array length, found {}", other.describe()),
@@ -940,6 +983,8 @@ impl Parser {
                     }
                     self.expect(&Token::RParen)?;
                     Expr::FunctionCall { name, args }
+                } else if let Some(&value) = self.enum_constants.get(&name) {
+                    Expr::IntLiteral(value)
                 } else {
                     Expr::Var(name)
                 }
@@ -958,6 +1003,75 @@ impl Parser {
             }
         };
         Ok(TypedExpr::new(node, start.to(self.previous_span())))
+    }
+
+    /// Parse an `enum` type reference or definition. Current token is `Token::Enum`.
+    ///
+    /// C gives every enumeration constant type `int`, and an enum type is
+    /// compatible with `int`. So this method records each value in
+    /// `enum_constants` and [`Self::parse_primary`] substitutes it at each use.
+    /// No later stage sees an enumerator name, and the code generator needs no
+    /// enum support at all.
+    fn parse_enum_type(&mut self) -> Result<Type, CompileError> {
+        self.advance(); // the `enum` keyword
+        let tag = match self.current().clone() {
+            Token::Ident(name) => { self.advance(); Some(name) }
+            _ => None,
+        };
+
+        if self.current() != &Token::LBrace {
+            // A bare reference: `enum Tag`. Must already be defined.
+            let name = tag.ok_or_else(|| CompileError::new(
+                "anonymous enum needs a body", self.current_span(),
+            ))?;
+            return self.enums.get(&name).cloned().ok_or_else(|| {
+                CompileError::new(format!("unknown enum `{name}`"), self.previous_span())
+            });
+        }
+
+        self.advance(); // the opening brace
+        // The counter starts at 0. An explicit value moves it, and the next
+        // enumerator continues from there. `{ A = 5, B, C = 1, D }` is 5, 6, 1, 2.
+        let mut next: i64 = 0;
+        let mut count = 0usize;
+        while self.current() != &Token::RBrace {
+            let name_span = self.current_span();
+            let name = self.expect_ident("an enumerator name")?;
+            if self.current() == &Token::Assign {
+                self.advance();
+                let value = self.parse_ternary()?;
+                match crate::constfold::eval_const(&value)? {
+                    crate::constfold::ConstValue::Int(n) => next = n,
+                    crate::constfold::ConstValue::Bytes(_) => {
+                        return Err(CompileError::new(
+                            "an enumerator needs an integer constant", value.span,
+                        ));
+                    }
+                }
+            }
+            if self.enum_constants.insert(name.clone(), next).is_some() {
+                return Err(CompileError::new(
+                    format!("enumerator `{name}` is already defined"), name_span,
+                ));
+            }
+            next += 1;
+            count += 1;
+            if self.current() != &Token::Comma {
+                break;
+            }
+            self.advance(); // a trailing comma before the closing brace is allowed
+        }
+        self.expect(&Token::RBrace)?;
+
+        if count == 0 {
+            return Err(CompileError::new("an empty enum is not supported", self.previous_span()));
+        }
+
+        let ty = Type::Enum { tag: tag.clone() };
+        if let Some(name) = tag {
+            self.enums.insert(name, ty.clone());
+        }
+        Ok(ty)
     }
 
     /// Parse a `struct` type reference or definition. Current token is `Token::Struct`.
@@ -1083,6 +1197,37 @@ mod tests {
     fn a_pointer_return_type_survives() {
         let p = parse_src("void *malloc(long size);\nint main() { return 0; }").unwrap();
         assert_eq!(p.decls[0].return_type, Type::Pointer(Box::new(Type::Void)));
+    }
+
+    #[test]
+    fn an_enumerator_counts_up_and_an_explicit_value_resets_the_counter() {
+        // A = 5, B = 6, C = 1, D = 2.
+        let p = parse_src(
+            "enum E { A = 5, B, C = 1, D };\n\
+             int w = A; int x = B; int y = C; int z = D;\n\
+             int main() { return 0; }",
+        )
+        .unwrap();
+        let values: Vec<i64> = p
+            .globals
+            .iter()
+            .map(|g| match &g.init {
+                Some(TypedExpr { node: Expr::IntLiteral(n), .. }) => *n,
+                other => panic!("`{}` did not fold to a constant: {other:?}", g.name),
+            })
+            .collect();
+        assert_eq!(values, vec![5, 6, 1, 2]);
+    }
+
+    #[test]
+    fn an_enumerator_use_becomes_a_literal_not_a_variable() {
+        // The parser substitutes the value, so no later stage sees the name.
+        // This is why the code generator needs no enum support.
+        let p = parse_src("enum { HI = 9 };\nint main() { return HI; }").unwrap();
+        match &p.functions[0].body[0].node {
+            Stmt::Return(value) => assert_eq!(value.node, Expr::IntLiteral(9)),
+            other => panic!("expected a return, got {other:?}"),
+        }
     }
 
     #[test]

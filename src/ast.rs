@@ -28,6 +28,7 @@ pub enum Type {
     Long,
     LongLong,
     Void,
+    Enum { tag: Option<String> },
     Pointer(Box<Type>),
     Array(Box<Type>, usize),
     Struct { tag: Option<String>, fields: Vec<StructField>, size: usize, align: usize },
@@ -38,7 +39,7 @@ impl Type {
     pub fn size(&self) -> usize {
         match self {
             Type::Char => 1,
-            Type::Int | Type::Long => 4,
+            Type::Int | Type::Long | Type::Enum { .. } => 4,
             Type::Bool => 1,
             Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
@@ -50,7 +51,7 @@ impl Type {
     pub fn align(&self) -> usize {
         match self {
             Type::Char => 1,
-            Type::Int | Type::Long => 4,
+            Type::Int | Type::Long | Type::Enum { .. } => 4,
             Type::Bool => 1,
             Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
@@ -81,6 +82,10 @@ impl Type {
             Type::Bool => "_Bool".to_string(),
             Type::Long => "long".to_string(),
             Type::LongLong => "long long".to_string(),
+            Type::Enum { tag } => match tag {
+                Some(name) => format!("enum {name}"),
+                None => "enum <anonymous>".to_string(),
+            },
             Type::Void => "void".to_string(),
             Type::Pointer(t) => format!("{}*", t.describe()),
             Type::Array(t, n) => format!("{}[{}]", t.describe(), n),

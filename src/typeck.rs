@@ -136,7 +136,7 @@ fn check_global(
         crate::constfold::ConstValue::Int(_) => {
             let scalar = matches!(
                 g.ty,
-                Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Pointer(_)
+                Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. } | Type::Pointer(_)
             );
             if !scalar {
                 return Err(CompileError::new(
@@ -223,7 +223,7 @@ fn check_expr(
             if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
                           | BinaryOp::Shl | BinaryOp::Shr)
             {
-                let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong);
+                let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. });
                 if !is_int(&l.ty) || !is_int(&r.ty) {
                     return Err(CompileError::new(
                         format!(
@@ -355,7 +355,7 @@ fn check_expr(
             check_expr(cond, scope, sigs)?;
             check_expr(then_e, scope, sigs)?;
             check_expr(else_e, scope, sigs)?;
-            let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong);
+            let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. });
             if then_e.ty == else_e.ty {
                 then_e.ty.clone()
             } else if is_int(&then_e.ty) && is_int(&else_e.ty) {

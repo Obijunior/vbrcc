@@ -171,7 +171,15 @@ example a dereference of a value that is not a pointer.
 | Pointers | `int *p`, `int **pp` |
 | Arrays | `int a[10]` |
 | Structs | `struct Point { int x, y; };` |
+| Enums | `enum Color { RED, GREEN = 5, BLUE };` |
 | Type aliases | `typedef long long size_t;`, `typedef struct { int x, y; } Point;` |
+
+> **An enum is an `int`.** An enumeration constant has type `int`, and an enum type
+> is compatible with `int`, so it is 4 bytes wide. The counter starts at 0 and an
+> explicit value moves it, so `enum E { A = 5, B, C = 1, D };` gives 5, 6, 1, and 2.
+> The parser substitutes each value at its use, so a constant works anywhere a
+> literal works, including an array length and a global initializer. A trailing
+> comma before the closing brace is allowed.
 
 > **A struct is a value.** Member access reads and writes at a computed offset. A whole
 > struct copies on assignment and on initialization. A struct passes to a function and
@@ -211,7 +219,7 @@ example a dereference of a value that is not a pointer.
 
 ### Not yet supported
 
-* `union` and `enum`
+* `union`
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
 * `sizeof`
@@ -352,7 +360,7 @@ cargo test
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
 - More control flow: `do-while`, `break`, `continue`, `switch`
 - Initializer lists and designated initializers
-- `union` and `enum`
+- `union`
 - More than four function parameters or call arguments
 - `sizeof`
 - `unsigned` integer types
