@@ -299,36 +299,95 @@ impl Parser {
         }
     }
 
-    /// The `[N]` after a declarator name, or `base` unchanged when no `[`
-    /// follows. A global that writes `[]` needs the length from its
-    /// initializer, so [`Parser::parse_global_tail`] does not use this.
-    fn parse_array_suffix(&mut self, base: Type) -> Result<Type, CompileError> {
-        if self.current() != &Token::LBracket {
-            return Ok(base);
-        }
-        self.advance(); // '['
-        let tok = self.advance().clone();
-        let len = match &tok {
-            Token::IntLiteral(n) if *n >= 0 => *n as usize,
-            // `int a[MAX];` where MAX is an enumerator.
-            Token::Ident(name) => match self.enum_constants.get(name) {
-                Some(&value) if value >= 0 => value as usize,
-                _ => {
+    /// The `[N]` groups after a declarator name, or `base` unchanged when no
+    /// `[` follows. Dimensions fold from the right: `int x[3][4]` is "array 3
+    /// of (array 4 of int)", so the last `[N]` is the innermost element type.
+    ///
+    /// `allow_unsized_first` permits one leading `[]`, whose length the
+    /// initializer supplies. The returned flag reports that case. Only the
+    /// first dimension may be empty; C needs every inner dimension to compute
+    /// a row stride.
+    fn parse_array_suffix(
+        &mut self,
+        base: Type,
+        allow_unsized_first: bool,
+    ) -> Result<(Type, bool), CompileError> {
+        let mut dims: Vec<usize> = Vec::new();
+        let mut unsized_first = false;
+
+        while self.current() == &Token::LBracket {
+            self.advance(); // '['
+
+            if self.current() == &Token::RBracket {
+                if !(dims.is_empty() && allow_unsized_first) {
                     return Err(CompileError::new(
-                        format!("expected array length, found {}", tok.describe()),
+                        "only the first array dimension may be empty",
+                        self.current_span(),
+                    )
+                    .with_label("an inner dimension sets the row stride"));
+                }
+                unsized_first = true;
+                dims.push(0);
+                self.advance(); // ']'
+                continue;
+            }
+
+            let tok = self.advance().clone();
+            let len = match &tok {
+                Token::IntLiteral(n) if *n >= 0 => *n as usize,
+                // `int a[MAX];` where MAX is an enumerator.
+                Token::Ident(name) => match self.enum_constants.get(name) {
+                    Some(&value) if value >= 0 => value as usize,
+                    _ => {
+                        return Err(CompileError::new(
+                            format!("expected array length, found {}", tok.describe()),
+                            self.previous_span(),
+                        ));
+                    }
+                },
+                other => {
+                    return Err(CompileError::new(
+                        format!("expected array length, found {}", other.describe()),
                         self.previous_span(),
                     ));
                 }
-            },
-            other => {
-                return Err(CompileError::new(
-                    format!("expected array length, found {}", other.describe()),
-                    self.previous_span(),
-                ));
+            };
+            self.expect(&Token::RBracket)?;
+            dims.push(len);
+        }
+
+        let ty = dims
+            .into_iter()
+            .rev()
+            .fold(base, |elem, len| Type::Array(Box::new(elem), len));
+        Ok((ty, unsized_first))
+    }
+
+    /// An initializer: a brace-enclosed list, or a single expression.
+    ///
+    /// Lists nest, so a `{` inside a list starts a sub-list. A trailing comma
+    /// before `}` is legal. The leaf calls [`Parser::parse_expr`], which stops
+    /// at a comma, so commas stay list separators. The type checker matches the
+    /// shape of the result against the declared type; the parser does not.
+    fn parse_initializer(&mut self) -> Result<TypedExpr, CompileError> {
+        if self.current() != &Token::LBrace {
+            return self.parse_expr();
+        }
+        let start = self.current_span();
+        self.advance(); // '{'
+
+        let mut elems = Vec::new();
+        while self.current() != &Token::RBrace {
+            elems.push(self.parse_initializer()?);
+            if self.current() != &Token::Comma {
+                break;
             }
-        };
-        self.expect(&Token::RBracket)?;
-        Ok(Type::Array(Box::new(base), len))
+            self.advance(); // ','
+        }
+        self.expect(&Token::RBrace)?;
+
+        let span = start.to(self.previous_span());
+        Ok(TypedExpr::new(Expr::InitList(elems), span))
     }
 
     /// One complete type: specifiers plus one declarator's pointer suffix.
@@ -349,13 +408,8 @@ impl Parser {
 
     /// The rest of a top-level item once its type is already in hand: a
     /// name, then either a global tail or a parameter list and a body/`;`.
-    /// Shared by `parse_top_level` (the common case) and `parse_program`'s
-    /// struct branch, where the type was a `struct T { ... }` definition
-    /// parsed directly rather than through `parse_type`.
     fn parse_declarator_tail(&mut self, start: Span, base_type: Type) -> Result<TopLevel, CompileError> {
-        // `base_type` is the shared specifier type. The `*`s belong to this
-        // declarator alone, so a later name in the same declaration starts
-        // again from `base_type`.
+        // `base_type` is the shared specifier type.
         let return_type = self.parse_pointer_suffix(base_type.clone());
         let name = match self.advance().clone() {
             Token::Ident(s) => s,
@@ -421,37 +475,12 @@ impl Parser {
         let mut name = name;
 
         loop {
-            let mut unsized_array = false;
-            if self.current() == &Token::LBracket {
-                self.advance(); // '['
-                if self.current() == &Token::RBracket {
-                    unsized_array = true;
-                    ty = Type::Array(Box::new(ty), 0);
-                } else {
-                    let len = match self.advance().clone() {
-                        Token::IntLiteral(n) if n >= 0 => n as usize,
-                        other => {
-                            return Err(CompileError::new(
-                                format!("expected array length, found {}", other.describe()),
-                                self.previous_span(),
-                            ));
-                        }
-                    };
-                    ty = Type::Array(Box::new(ty), len);
-                }
-                self.expect(&Token::RBracket)?;
-            }
+            let unsized_array;
+            (ty, unsized_array) = self.parse_array_suffix(ty, true)?;
 
             let init = if self.current() == &Token::Assign {
                 self.advance(); // '='
-                if self.current() == &Token::LBrace {
-                    return Err(CompileError::new(
-                        "initializer lists for globals are not supported yet",
-                        self.current_span(),
-                    )
-                    .with_label("use a scalar constant or a string literal"));
-                }
-                Some(self.parse_expr()?)
+                Some(self.parse_initializer()?)
             } else {
                 None
             };
@@ -462,7 +491,7 @@ impl Parser {
                     "array size missing",
                     decl_start.to(self.previous_span()),
                 )
-                .with_label("an unsized array needs a string initializer"));
+                .with_label("an unsized array needs a string or brace initializer"));
             }
 
             let span = decl_start.to(self.previous_span());
@@ -482,9 +511,6 @@ impl Parser {
     }
 
     /// Parameters between `(` and `)`, with the `)` left unconsumed.
-    ///
-    /// Returns the parameters and whether the list ends in `...`. A parameter
-    /// may be unnamed, which prototypes often are.
     fn parse_param_list(&mut self) -> Result<(Vec<(Type, String)>, bool), CompileError> {
         let mut params = Vec::new();
 
@@ -748,41 +774,31 @@ impl Parser {
     /// `Type` here. Nothing past the parser ever learns a typedef existed.
     fn parse_typedef(&mut self) -> Result<(), CompileError> {
         self.expect(&Token::Typedef)?;
-        let base = self.parse_type()?;
-        let name = match self.advance().clone() {
-            Token::Ident(s) => s,
-            other => return Err(CompileError::new(
-                format!("expected typedef name, found {}", other.describe()),
-                self.previous_span(),
-            )),
-        };
-        let name_span = self.previous_span();
-        let ty = if self.current() == &Token::LBracket {
-            self.advance();
-            let len = match self.advance().clone() {
-                Token::IntLiteral(n) if n >= 0 => n as usize,
-                other => return Err(CompileError::new(
-                    format!("expected array length, found {}", other.describe()),
-                    self.previous_span(),
-                )),
-            };
-            self.expect(&Token::RBracket)?;
-            Type::Array(Box::new(base), len)
-        } else {
-            base
-        };
-        self.expect(&Token::Semicolon)?;
+        let base = self.parse_base_type()?;
+        loop {
+            let ty = self.parse_pointer_suffix(base.clone());
+            let name = self.expect_ident("a typedef name")?;
+            let name_span = self.previous_span();
+            let (ty, _) = self.parse_array_suffix(ty, false)?;
 
-        if let Some(existing) = self.typedefs.get(&name) {
-            if *existing != ty {
-                return Err(CompileError::new(
-                    format!("`{name}` redefined as `{}`, previously `{}`", ty.describe(), existing.describe()),
-                    name_span,
-                ));
+            if let Some(existing) = self.typedefs.get(&name) {
+                if *existing != ty {
+                    return Err(CompileError::new(
+                        format!("`{name}` redefined as `{}`, previously `{}`",
+                                ty.describe(), existing.describe()),
+                        name_span,
+                    ));
+                }
+            } else {
+                self.typedefs.insert(name, ty);
             }
-        } else {
-            self.typedefs.insert(name, ty);
+
+            if self.current() != &Token::Comma {
+                break;
+            }
+            self.advance(); // ','
         }
+        self.expect(&Token::Semicolon)?;
         Ok(())
     }
 
@@ -851,10 +867,10 @@ impl Parser {
         loop {
             let ty = self.parse_pointer_suffix(base.clone());
             let name = self.expect_ident("a variable name")?;
-            let ty = self.parse_array_suffix(ty)?;
+            let (ty, _) = self.parse_array_suffix(ty, false)?;
             let init = if self.current() == &Token::Assign {
                 self.advance();
-                Some(self.parse_expr()?)
+                Some(self.parse_initializer()?)
             } else {
                 None
             };
@@ -1101,7 +1117,7 @@ impl Parser {
             loop {
                 let mty = self.parse_pointer_suffix(base.clone());
                 let mname = self.expect_ident("a member name")?;
-                let mty = self.parse_array_suffix(mty)?;
+                let (mty, _) = self.parse_array_suffix(mty, false)?;
                 members.push((mty, mname));
                 if self.current() != &Token::Comma {
                     break;
@@ -1425,6 +1441,87 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn parse_flat_initializer_list() {
+        // int a[3] = {1, 2, 3};
+        let mut p = parser(vec![
+            Token::Int, Token::Ident("a".into()),
+            Token::LBracket, Token::IntLiteral(3), Token::RBracket,
+            Token::Assign,
+            Token::LBrace,
+            Token::IntLiteral(1), Token::Comma,
+            Token::IntLiteral(2), Token::Comma,
+            Token::IntLiteral(3),
+            Token::RBrace, Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Array(Box::new(Type::Int), 3),
+            name: "a".into(),
+            init: Some(e(Expr::InitList(vec![
+                e(Expr::IntLiteral(1)),
+                e(Expr::IntLiteral(2)),
+                e(Expr::IntLiteral(3)),
+            ]))),
+        }));
+    }
+
+    #[test]
+    fn parse_nested_initializer_list_with_trailing_comma() {
+        // int a[2][2] = {{1, 2}, {3, 4},};
+        let mut p = parser(vec![
+            Token::Int, Token::Ident("a".into()),
+            Token::LBracket, Token::IntLiteral(2), Token::RBracket,
+            Token::LBracket, Token::IntLiteral(2), Token::RBracket,
+            Token::Assign,
+            Token::LBrace,
+            Token::LBrace, Token::IntLiteral(1), Token::Comma, Token::IntLiteral(2), Token::RBrace,
+            Token::Comma,
+            Token::LBrace, Token::IntLiteral(3), Token::Comma, Token::IntLiteral(4), Token::RBrace,
+            Token::Comma,
+            Token::RBrace, Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Array(Box::new(Type::Array(Box::new(Type::Int), 2)), 2),
+            name: "a".into(),
+            init: Some(e(Expr::InitList(vec![
+                e(Expr::InitList(vec![e(Expr::IntLiteral(1)), e(Expr::IntLiteral(2))])),
+                e(Expr::InitList(vec![e(Expr::IntLiteral(3)), e(Expr::IntLiteral(4))])),
+            ]))),
+        }));
+    }
+
+    /// A global brace initializer used to be a hard parser error.
+    #[test]
+    fn parse_global_initializer_list() {
+        let program = parse_src("int g[2] = {1, 2};").unwrap();
+        match &program.globals[0].init {
+            Some(init) => match &init.node {
+                Expr::InitList(elems) => assert_eq!(elems.len(), 2),
+                other => panic!("expected InitList, got {other:?}"),
+            },
+            None => panic!("expected an initializer"),
+        }
+    }
+
+    #[test]
+    fn parse_two_dimensional_array_decl() {
+        // int a[3][4]; is "array 3 of (array 4 of int)".
+        let mut p = parser(vec![
+            Token::Int, Token::Ident("a".into()),
+            Token::LBracket, Token::IntLiteral(3), Token::RBracket,
+            Token::LBracket, Token::IntLiteral(4), Token::RBracket,
+            Token::Semicolon, Token::EOF,
+        ]);
+        let stmt = p.parse_statement().unwrap();
+        assert_eq!(stmt, s(Stmt::VarDecl {
+            ty: Type::Array(Box::new(Type::Array(Box::new(Type::Int), 4)), 3),
+            name: "a".into(),
+            init: None,
+        }));
+    }
+
         #[test]
     fn parse_address_of() {
         let mut p = parser(vec![Token::Ampersand, Token::Ident("x".into()), Token::EOF]);
@@ -1514,12 +1611,6 @@ mod tests {
         let p = parse_src("int g = 1;\nint main() { return g; }").unwrap();
         assert_eq!(p.globals.len(), 1);
         assert_eq!(p.functions.len(), 1);
-    }
-
-    #[test]
-    fn a_braced_global_initializer_is_rejected() {
-        let err = parse_src("int a[3] = {1, 2, 3};\nint main() { return 0; }").unwrap_err();
-        assert!(err.message.contains("initializer lists"), "got: {}", err.message);
     }
 
     #[test]
@@ -1717,6 +1808,18 @@ mod tests {
             },
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_typedef_list_binds_each_name_separately() {
+        // `A` is `int *`, `B` is `int`, `R` is `int[4]`.
+        let p = parse_src(
+            "typedef int *A, B, R[4];\nA a; B b; R r;\nint main() { return 0; }",
+        )
+        .unwrap();
+        assert_eq!(p.globals[0].ty, Type::Pointer(Box::new(Type::Int)));
+        assert_eq!(p.globals[1].ty, Type::Int);
+        assert_eq!(p.globals[2].ty, Type::Array(Box::new(Type::Int), 4));
     }
 
     #[test]

@@ -104,6 +104,14 @@ fn check_global(
     };
 
     let mut scratch = file_scope.clone();
+
+    // A brace list has its own shape rules. Each leaf must fold to a constant,
+    // which `crate::codegen::gen_global_init` checks when it emits the data.
+    if matches!(init.node, Expr::InitList(_)) {
+        g.ty = check_initializer(init, &g.ty, &mut scratch, sigs)?;
+        return Ok(());
+    }
+
     check_expr(init, &mut scratch, sigs)?;
 
     match crate::constfold::eval_const(init)? {
@@ -153,6 +161,80 @@ fn check_global(
     Ok(())
 }
 
+/// Match a declaration initializer against its declared type.
+///
+/// Returns the concrete type. That is `target` itself, except an unsized
+/// outer array, whose length comes from the number of elements in the list.
+/// Only the outer dimension can be unsized; C needs every inner dimension to
+/// compute a row stride, and the parser already refuses an empty inner `[]`.
+///
+/// The list nests with the type: a `{...}` element goes against the element
+/// type, so `int a[2][3]` takes two lists of three integers.
+fn check_initializer(
+    init: &mut TypedExpr,
+    target: &Type,
+    scope: &mut HashMap<String, Type>,
+    sigs: &Sigs,
+) -> Result<Type, CompileError> {
+    let elems = match &mut init.node {
+        Expr::InitList(elems) => elems,
+        // A single expression. Valid for a scalar, wrong for an array.
+        _ => {
+            if matches!(target, Type::Array(_, _)) {
+                let hint = if matches!(init.node, Expr::StringLiteral(_)) {
+                    "a string initializer works only on a global `char` array"
+                } else {
+                    "write the elements in braces"
+                };
+                return Err(CompileError::new(
+                    format!("`{}` needs a brace initializer", target.describe()),
+                    init.span,
+                )
+                .with_label(hint));
+            }
+            check_expr(init, scope, sigs)?;
+            return Ok(target.clone());
+        }
+    };
+
+    let (elem_ty, declared) = match target {
+        Type::Array(elem, len) => ((**elem).clone(), *len),
+        _ => {
+            return Err(CompileError::new(
+                format!(
+                    "a brace initializer needs an array type, not `{}`",
+                    target.describe()
+                ),
+                init.span,
+            ));
+        }
+    };
+
+    // `declared == 0` is an unsized outer dimension waiting for a length.
+    if declared != 0 && elems.len() > declared {
+        return Err(CompileError::new(
+            format!(
+                "too many initializers: {} values into `{}`",
+                elems.len(),
+                target.describe()
+            ),
+            init.span,
+        ));
+    }
+
+    for elem in elems.iter_mut() {
+        check_initializer(elem, &elem_ty, scope, sigs)?;
+    }
+
+    let concrete = if declared == 0 {
+        Type::Array(Box::new(elem_ty), elems.len())
+    } else {
+        target.clone()
+    };
+    init.ty = concrete.clone();
+    Ok(concrete)
+}
+
 fn check_block(
     stmts: &mut [Spanned<Stmt>],
     scope: &mut HashMap<String, Type>,
@@ -173,7 +255,9 @@ fn check_stmt(
         Stmt::Return(e) | Stmt::Expr(e) => check_expr(e, scope, sigs)?,
         Stmt::VarDecl { ty, name, init } => {
             if let Some(e) = init {
-                check_expr(e, scope, sigs)?;
+                // An unsized local array has no length to infer from, so the
+                // returned type only differs for a list against `[0]`.
+                *ty = check_initializer(e, ty, scope, sigs)?;
             }
             scope.insert(name.clone(), ty.clone());
         }
@@ -208,6 +292,12 @@ fn check_expr(
     let span = expr.span;
     let ty: Type = match &mut expr.node {
         Expr::IntLiteral(_) => Type::Int,
+        Expr::InitList(_) => {
+            return Err(CompileError::new(
+                "a brace initializer is only valid in a variable declaration",
+                span,
+            ));
+        }
         Expr::StringLiteral(_) => Type::Pointer(Box::new(Type::Char)),
         Expr::Var(name) => scope.get(name).cloned().ok_or_else(|| {
             CompileError::new(format!("undefined variable `{name}`"), span)
@@ -394,6 +484,73 @@ mod tests {
     fn parse(src: &str) -> Program {
         let tokens = Lexer::new(src).tokenize().unwrap();
         Parser::new(tokens).parse_program().unwrap()
+    }
+
+    #[test]
+    fn initializer_list_length_must_fit() {
+        let mut program = parse("int main() { int a[2] = {1, 2, 3}; return 0; }");
+        let err = check(&mut program).unwrap_err();
+        assert!(err.message.contains("too many"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_array_needs_a_brace_initializer() {
+        let mut program = parse("int main() { int a[3] = 5; return 0; }");
+        let err = check(&mut program).unwrap_err();
+        assert!(err.message.contains("brace initializer"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_scalar_rejects_a_brace_initializer() {
+        let mut program = parse("int main() { int x = {1}; return 0; }");
+        let err = check(&mut program).unwrap_err();
+        assert!(err.message.contains("array type"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn nested_initializer_list_type_checks() {
+        let mut program = parse("int main() { int a[2][2] = {{1, 2}, {3, 4}}; return 0; }");
+        assert!(check(&mut program).is_ok());
+    }
+
+    #[test]
+    fn a_nested_list_too_deep_is_rejected() {
+        let mut program = parse("int main() { int a[2] = {{1}, {2}}; return 0; }");
+        let err = check(&mut program).unwrap_err();
+        assert!(err.message.contains("array type"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn unsized_global_array_length_is_inferred_from_its_initializer() {
+        let mut program = parse("int g[] = {1, 2, 3, 4};");
+        check(&mut program).unwrap();
+        assert_eq!(program.globals[0].ty, Type::Array(Box::new(Type::Int), 4));
+    }
+
+    /// The element count fills only the outer dimension, so the type keeps
+    /// the declared row width.
+    #[test]
+    fn unsized_global_array_of_rows_infers_only_the_outer_length() {
+        let mut program = parse("int g[][2] = {{1, 2}, {3, 4}, {5, 6}};");
+        check(&mut program).unwrap();
+        assert_eq!(
+            program.globals[0].ty,
+            Type::Array(Box::new(Type::Array(Box::new(Type::Int), 2)), 3)
+        );
+    }
+
+    /// A local declaration must carry the checked type forward, because
+    /// codegen sizes the frame slot from it.
+    #[test]
+    fn a_local_initializer_list_leaves_the_declared_type_intact() {
+        let mut program = parse("int main() { int a[3] = {1}; return 0; }");
+        check(&mut program).unwrap();
+        match &program.functions[0].body[0].node {
+            Stmt::VarDecl { ty, .. } => {
+                assert_eq!(*ty, Type::Array(Box::new(Type::Int), 3));
+            }
+            other => panic!("expected VarDecl, got {other:?}"),
+        }
     }
 
     #[test]

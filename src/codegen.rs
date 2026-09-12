@@ -166,6 +166,10 @@ impl Codegen {
             Some(e) => e,
         };
 
+        if matches!(init.node, Expr::InitList(_)) {
+            return self.gen_global_init(init, &g.ty);
+        }
+
         if matches!(g.ty, Type::Struct { .. }) {
             return Err(CompileError::new(
                 "a struct global with an initializer needs brace-initializer support (item 15)",
@@ -204,6 +208,55 @@ impl Codegen {
                     self.emit_data(&format!("    .zero {}", declared - bytes.len()));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Emit `.data` directives for a brace initializer, row-major.
+    ///
+    /// Each leaf must fold to a constant, because the loader writes this data
+    /// before any code runs. Elements the list leaves out become `.zero`.
+    fn gen_global_init(&mut self, init: &TypedExpr, ty: &Type) -> Result<(), CompileError> {
+        let elems = match &init.node {
+            Expr::InitList(elems) => elems,
+            _ => {
+                let n = match crate::constfold::eval_const(init)? {
+                    crate::constfold::ConstValue::Int(n) => n,
+                    crate::constfold::ConstValue::Bytes(_) => {
+                        return Err(CompileError::new(
+                            "a string inside a brace initializer is not supported yet",
+                            init.span,
+                        ));
+                    }
+                };
+                if *ty == Type::Bool {
+                    self.emit_data(&format!("    .byte {}", (n != 0) as i64));
+                } else {
+                    match ty.size() {
+                        1 => self.emit_data(&format!("    .byte {n}")),
+                        4 => self.emit_data(&format!("    .long {n}")),
+                        _ => self.emit_data(&format!("    .quad {n}")),
+                    }
+                }
+                return Ok(());
+            }
+        };
+
+        let (elem_ty, len) = match ty {
+            Type::Array(elem, len) => ((**elem).clone(), *len),
+            _ => {
+                return Err(CompileError::new(
+                    "internal: brace initializer for a non-array global",
+                    init.span,
+                ));
+            }
+        };
+
+        for elem in elems {
+            self.gen_global_init(elem, &elem_ty)?;
+        }
+        if elems.len() < len {
+            self.emit_data(&format!("    .zero {}", (len - elems.len()) * elem_ty.size()));
         }
         Ok(())
     }
@@ -374,7 +427,9 @@ impl Codegen {
                 let offset: i64 = self.stack_offset;
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
-                    if let Type::Struct { size, .. } = ty {
+                    if matches!(expr.node, Expr::InitList(_)) {
+                        self.gen_local_init(expr, ty, offset)?;
+                    } else if let Type::Struct { size, .. } = ty {
                         let size = *size;
                         self.gen_expr(expr)?;   // rax = source address
                         self.emit("  mov r11, rax");
@@ -436,8 +491,71 @@ impl Codegen {
         Ok(())
     }
 
-    /// Put the address of an lvalue in rax. Compare `gen_expr`, which puts its value
-    /// there.
+    /// Write a brace initializer into the frame, starting at `[rbp + base_off]`.
+    /// `base_off` is negative, and the caller has already reserved `ty.size()` bytes there.
+    fn gen_local_init(
+        &mut self,
+        init: &TypedExpr,
+        ty: &Type,
+        base_off: i64,
+    ) -> Result<(), CompileError> {
+        let elems = match &init.node {
+            Expr::InitList(elems) => elems,
+            _ => {
+                if let Type::Struct { .. } = ty {
+                    return Err(CompileError::new(
+                        "a struct inside a brace initializer is not supported yet",
+                        init.span,
+                    ));
+                }
+                self.gen_expr(init)?;
+                if *ty == Type::Bool {
+                    self.normalize_bool();
+                }
+                let addr = format!("[rbp - {}]", -base_off);
+                self.emit_store(&addr, "rax", ty.size());
+                return Ok(());
+            }
+        };
+
+        let (elem_ty, len) = match ty {
+            Type::Array(elem, len) => ((**elem).clone(), *len),
+            _ => {
+                return Err(CompileError::new(
+                    "internal: brace initializer for a non-array local",
+                    init.span,
+                ));
+            }
+        };
+
+        let stride = elem_ty.size() as i64;
+        for (k, elem) in elems.iter().enumerate() {
+            self.gen_local_init(elem, &elem_ty, base_off + k as i64 * stride)?;
+        }
+
+        // Zero what the list left out. `emit_store` has no 2-byte form, so the
+        // widths step 8, 4, 1 and never write past the end of the array.
+        let filled = elems.len() as i64 * stride;
+        let total = len as i64 * stride;
+        if filled < total {
+            self.emit("  xor rax, rax");
+            let mut cur = base_off + filled;
+            let end = base_off + total;
+            while cur < end {
+                let width = match end - cur {
+                    n if n >= 8 => 8,
+                    n if n >= 4 => 4,
+                    _ => 1,
+                };
+                let addr = format!("[rbp - {}]", -cur);
+                self.emit_store(&addr, "rax", width as usize);
+                cur += width;
+            }
+        }
+        Ok(())
+    }
+
+    /// Put the address of an lvalue in rax. Compare `gen_expr`, which puts its value there.
     fn gen_lvalue_addr(&mut self, expr: &TypedExpr) -> Result<(), CompileError> {
         match &expr.node {
             Expr::Var(name) => {
@@ -487,12 +605,6 @@ impl Codegen {
 
     /// Copy `size` bytes from `[r11]` to `[r10]`, using `rax` as scratch.
     /// Unrolled at compile time; `r10` / `r11` / `rax` are caller-clobbered.
-    ///
-    /// The assembler has no plain sized load and no 16-bit form, so the load
-    /// side uses the sign-extending `movsxd` / `movsx` for the 4- and 1-byte
-    /// chunks. The matching sized store writes back only those bytes, so the
-    /// sign extension never reaches memory. Chunk sizes are 8, 4, or 1; a
-    /// 2-byte tail falls to two 1-byte moves.
     fn emit_struct_copy(&mut self, size: usize) {
         let mut done = 0usize;
         while done < size {
@@ -526,6 +638,15 @@ impl Codegen {
                 self.emit(&format!("  mov rax, {}", n));
             }
 
+            // A brace list has no value in a register. The declaration paths
+            // (`gen_local_init`, `gen_global_init`) take it before this point.
+            Expr::InitList(_) => {
+                return Err(CompileError::new(
+                    "internal: initializer list reached generic expression codegen",
+                    expr.span,
+                ));
+            }
+
             Expr::StringLiteral(s) => {
                 let label = self.add_string(s);
                 self.emit(&format!("  lea rax, [rip + {}]", label));
@@ -533,11 +654,9 @@ impl Codegen {
 
             Expr::FunctionCall {name, args} => {
                 // Win64 passes the first four integer arguments in these registers.
+                // make 4 args, will spill to stack in later verison to accomodate more args
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
 
-                // A struct result that travels in memory needs a caller slot;
-                // its address goes in rcx as a hidden first argument, so the
-                // real arguments start one register later.
                 let ret_mem = Codegen::abi_is_memory(&expr.ty);
                 let ret_slot = match (&expr.ty, ret_mem) {
                     (Type::Struct { size, align, .. }, true) => Some(self.reserve_slot(*size, *align)),

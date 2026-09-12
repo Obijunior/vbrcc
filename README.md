@@ -172,7 +172,7 @@ example a dereference of a value that is not a pointer.
 | Arrays | `int a[10]` |
 | Structs | `struct Point { int x, y; };` |
 | Enums | `enum Color { RED, GREEN = 5, BLUE };` |
-| Type aliases | `typedef long long size_t;`, `typedef struct { int x, y; } Point;` |
+| Type aliases | `typedef long long size_t;`, `typedef struct { int x, y; } Point;`, `typedef int *Ptr, Plain, Row[4];` |
 
 > **An enum is an `int`.** An enumeration constant has type `int`, and an enum type
 > is compatible with `int`, so it is 4 bytes wide. The counter starts at 0 and an
@@ -215,6 +215,8 @@ example a dereference of a value that is not a pointer.
 | Comments | `// line comment`, `/* block comment */` |
 
 > **A `*` binds to one name.** In `int *a, b;` only `a` is a pointer. `b` is an `int`.
+> The same rule holds in a `typedef` list, so `typedef int *A, B;` makes `A` a pointer
+> and `B` a plain `int`.
 > A `for` initializer still takes one name, so `for (int i = 0, n = 5; ...)` is an error.
 
 ### Not yet supported
@@ -225,7 +227,8 @@ example a dereference of a value that is not a pointer.
 * `sizeof`
 * The comma operator, and pre-increment and pre-decrement (`++i`, `--i`)
 * The storage-class and function specifiers `static`, `extern`, `inline`, and `register`
-* Initializer lists, such as `int a[3] = {1, 2, 3};`, and designated initializers
+* Designated initializers (`{ .x = 1, [3] = 7 }`), compound literals, and a string
+  inside a brace initializer
 * More than four function parameters or call arguments
 * Integer promotion and the usual arithmetic conversions
 * Block-level scope. Every variable shares one flat scope for each function
@@ -359,7 +362,7 @@ cargo test
 
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
 - More control flow: `do-while`, `break`, `continue`, `switch`
-- Initializer lists and designated initializers
+- Designated initializers and compound literals
 - `union`
 - More than four function parameters or call arguments
 - `sizeof`

@@ -4,13 +4,18 @@
 //! sees only literals, operators, parentheses, and identifiers. C gives an identifier
 //! that is not a macro the value `0`, so an unknown name is not an error here.
 //!
-//! All arithmetic uses `i64`. C99 asks for the widest integer type, and `long` is 64
-//! bits on this target.
+//! All arithmetic uses `i64`. C99 asks for `intmax_t`, which is `long long` on this
+//! target, so 64 bits is the correct width. Do not read this as the width of `long`.
+//! This target is LLP64, so `long` is 32 bits and `long long` is 64.
 //!
 //! # Limits
 //!
 //! The comma operator is missing. To add a binary operator, add a row to
 //! `binding_power` and an arm to `Eval::apply`.
+//!
+//! Every operand is signed. C99 asks for `uintmax_t` arithmetic when either operand
+//! is unsigned, so `#if` will disagree with the compiler proper once `unsigned`
+//! exists. Fix both together.
 
 use crate::diagnostic::{CompileError, Span};
 use crate::lexer::{SpannedToken, Token};

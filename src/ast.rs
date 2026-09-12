@@ -123,6 +123,7 @@ pub enum Expr {
     AddressOf(Box<TypedExpr>),              // &expr
     Deref(Box<TypedExpr>),                  // *expr
     Index(Box<TypedExpr>, Box<TypedExpr>),  // base[idx]
+    InitList(Vec<TypedExpr>),               // { a, b, {c, d} }
     Cast(Type, Box<TypedExpr>),             // (T)expr
     PostIncDec(IncDec, Box<TypedExpr>),     // expr++ or expr--
     Member(Box<TypedExpr>, String),         // expr.field

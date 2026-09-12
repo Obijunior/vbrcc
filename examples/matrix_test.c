@@ -1,4 +1,4 @@
-// this won't compile yet, I still need to add support for n-D arrays and using {}
+/* A 2D array with a nested initializer, read through a decayed pointer. */
 #include <stdio.h>
 int main() {
     int matrix[3][3] = {{1,2,3}, {4,5,6}, {7,8,9}};
