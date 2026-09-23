@@ -179,6 +179,25 @@ int main() {
     }
 }
 
+/// A 4-byte struct comes back in `rax`. The caller stored all 8 bytes into a 4-byte
+/// slot, which overwrote the spilled left operand `g`. Was 2.
+#[test]
+fn return_register_struct_keeps_the_spilled_operand() {
+    let src = r#"
+struct S { int a; };
+struct S mk() { struct S s; s.a = 2; return s; }
+int h(struct S s) { return s.a; }
+int main() {
+    int g = 40;
+    return g + h(mk()); /* 42 */
+}
+"#;
+    match compile_and_run(src, "struct_ret_slot_width") {
+        Some(code) => assert_eq!(code, 42),
+        None => {}
+    }
+}
+
 #[test]
 fn return_large_struct_by_value() {
     let src = r#"

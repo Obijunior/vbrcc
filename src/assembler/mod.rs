@@ -24,17 +24,16 @@
 //!
 //! - [`pe`] writes a runnable Windows PE32+ executable. This is the default, and it
 //!   needs no external tool. Its import table covers one DLL, `msvcrt.dll`, so a libc
-//!   call such as `printf` resolves and runs. A program that imports from a second DLL
-//!   needs `lld-link`.
+//!   call such as `printf` resolves and runs. A `kernel32` call needs `lld-link`.
 //! - [`coff`] writes a relocatable object with a symbol table and
 //!   `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to read.
 //!
 //! # Supported subset
 //!
-//! The assembler accepts only the instructions the code generator emits: `mov`,
-//! `movzx`, `movsx`, `movsxd`, `lea`, `push`, `pop`, `add`, `sub`, `imul`, `idiv`,
-//! `neg`, `not`, `and`, `xor`, `cmp`, `cqo`, `ret`, `syscall`, the `set<cc>` family,
-//! the `j<cc>` family, `jmp`, and `call`. An operand is a 64-bit register, an 8-bit
+//! The assembler accepts a narrow set of instructions: `mov`, `movzx`, `movsx`,
+//! `movsxd`, `lea`, `push`, `pop`, `add`, `sub`, `imul`, `idiv`, `neg`, `not`, `and`,
+//! `or`, `xor`, `shl`, `sar`, `cmp`, `cqo`, `ret`, `syscall`, the `set<cc>` family, the
+//! `j<cc>` family, `jmp`, and `call`. An operand is a 64-bit register, an 8-bit
 //! sub-register (`al`, `bl`, `cl`, `dl`), an immediate, or a memory reference of the
 //! form `[base + disp]` or `[rip + label]`.
 //!

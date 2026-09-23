@@ -10,8 +10,9 @@
 //! | [`LinkerMode::Gcc`] | `--gcc` | the system `gcc` assembles and links the `.s` file | MinGW-w64 GCC |
 //!
 //! The default mode needs no external tool, and its import table covers `msvcrt.dll`.
-//! A libc call such as `printf` therefore runs. Use `--lld-link` when the program also
-//! imports from a second DLL, such as `kernel32` or the UCRT.
+//! A libc call such as `printf` therefore runs. `--lld-link` also links `kernel32.lib`.
+//! Its generated import library names `msvcrt.dll` for every external, so a call into
+//! any other DLL, such as `user32`, fails at load time.
 //!
 //! `--gcc` is an escape hatch and a comparison baseline. Compile the same source both
 //! ways and compare the two disassemblies to find a miscompilation in the built-in

@@ -105,3 +105,32 @@ fn post_increment_as_an_index_reads_the_old_slot() {
         assert_eq!(code, 42, "`a[i++]` must read a[0], not a[1]");
     }
 }
+
+/// Postfix `++` binds tighter than unary `*`, so `*p++` is `*(p++)`. It reads the
+/// old element and steps the pointer. Was `(*p)++`, which bumped the element.
+#[test]
+fn star_p_plus_plus_steps_the_pointer_not_the_element() {
+    let src = "int main() { char s[2]; s[0] = 5; s[1] = 9; char *p = s; \
+               int c = *p++; return c * 10 + *p; }";
+    if let Some(code) = compile_and_run(src, "postinc_star_p") {
+        assert_eq!(code, 59, "`*p++` must read s[0], then point at s[1]");
+    }
+}
+
+/// A postfix operator can be an operand of a binary operator. Was a syntax error.
+#[test]
+fn post_increment_as_the_left_operand() {
+    let src = "int main() { int i = 1; int j = i++ + 10; return j * 10 + i; }";
+    if let Some(code) = compile_and_run(src, "postinc_left_operand") {
+        assert_eq!(code, 112);
+    }
+}
+
+/// Was parsed as `(a + b)++`, an error.
+#[test]
+fn post_increment_as_the_right_operand() {
+    let src = "int main() { int a = 3; int b = 4; int r = a + b++; return r * 10 + b; }";
+    if let Some(code) = compile_and_run(src, "postinc_right_operand") {
+        assert_eq!(code, 75);
+    }
+}

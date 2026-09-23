@@ -6,7 +6,8 @@
 //!
 //! # Rules
 //!
-//! - Every expression puts its result in `rax`.
+//! - Every expression puts its result in `rax`. A struct or an array puts its address
+//!   there, not its bytes.
 //! - `rsp` does not move after the prologue. Intermediate values go into frame slots
 //!   through `spill_rax`, never through `push`. See that method for the reason.
 //! - Call arguments go into frame slots first. The generator loads `rcx`, `rdx`, `r8`,
@@ -172,7 +173,7 @@ impl Codegen {
 
         if matches!(g.ty, Type::Struct { .. }) {
             return Err(CompileError::new(
-                "a struct global with an initializer needs brace-initializer support (item 15)",
+                "a struct global with an initializer is not supported yet",
                 init.span,
             ));
         }
@@ -654,7 +655,7 @@ impl Codegen {
 
             Expr::FunctionCall {name, args} => {
                 // Win64 passes the first four integer arguments in these registers.
-                // make 4 args, will spill to stack in later verison to accomodate more args
+                // Stack arguments do not exist yet, so a call takes at most four.
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
 
                 let ret_mem = Codegen::abi_is_memory(&expr.ty);
@@ -714,11 +715,13 @@ impl Codegen {
                 // Keep the rule that every struct-typed expression leaves an
                 // ADDRESS in rax. A memory return already has one; a register
                 // return holds the bytes, so spill them to a slot.
-                if let Type::Struct { size, align, .. } = &expr.ty {
+                if let Type::Struct { .. } = &expr.ty {
                     if ret_mem {
                         self.emit(&format!("  lea rax, [rbp - {}]", -ret_slot.unwrap()));
                     } else {
-                        let slot = self.reserve_slot(*size, *align);
+                        // The store writes all 8 bytes of rax, so the slot takes 8
+                        // even for a smaller struct.
+                        let slot = self.reserve_slot(8, 8);
                         self.emit(&format!("  mov [rbp - {}], rax", -slot));
                         self.emit(&format!("  lea rax, [rbp - {}]", -slot));
                     }

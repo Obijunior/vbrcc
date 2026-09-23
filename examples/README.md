@@ -9,7 +9,7 @@ result you get when it works.
 | [`input.c`](input.c) | default | prints `hello world - sum: 52` |
 | [`multiple_functions.c`](multiple_functions.c) | default | prints `hello world`, then `hello world 5` |
 | [`reverse_string.c`](reverse_string.c) | default | prints a string and its reverse |
-| [`matrix_test.c`](matrix_test.c) | — | **does not compile yet**. See below. |
+| [`matrix_test.c`](matrix_test.c) | default | prints `1 2 3 4 5 6 7 8 9` |
 
 None of these need an external toolchain. The default backend encodes the machine code
 and writes the PE itself, and the PE has an import table. Each `printf` call therefore
@@ -76,27 +76,23 @@ Reversed string: [ dlrow olleh ]
 
 ## `matrix_test.c`
 
-**This file does not compile yet.** It is a target for the next phase of work, not a
-working sample. It needs two features that do not exist: multi-dimensional arrays, and
-brace initialiser lists.
-
-Today it fails in the parser:
+This file declares a 2D array with a nested brace initializer. It then reads the rows
+in order through a pointer to the first element.
 
 ```console
-$ vbrcc examples/matrix_test.c
-error: expected `;`, found `[`
-  --> examples/matrix_test.c:4:18
-   |
- 4 |     int matrix[3][3] = {{1,2,3}, {4,5,6}, {7,8,9}};
-   |                  ^ expected `;` here
+$ vbrcc examples/matrix_test.c -o matrix
+$ ./matrix.exe
+1 2 3 4 5 6 7 8 9
 ```
 
 ## When you still need `--lld-link`
 
 The import table of the default backend covers **one DLL**, `msvcrt.dll`. That covers
-the C runtime functions these examples call. A program that also imports from
-`kernel32`, `user32`, or the UCRT builds, but those symbols do not resolve at load time.
-Use `--lld-link` for such a program.
+the C runtime functions these examples call. A call into `kernel32` builds, but the
+symbol does not resolve at load time. Use `--lld-link` for such a program.
+
+`--lld-link` resolves calls into `msvcrt.dll` and `kernel32` only. A call into any other
+DLL, such as `user32`, builds and then fails at load time.
 
 `--lld-link` needs LLVM and the Windows SDK. See
 [`../docs/CONTRIBUTING.md`](../docs/CONTRIBUTING.md) for the setup.

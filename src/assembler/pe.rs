@@ -21,8 +21,8 @@
 //!
 //! This works for one DLL. `build_import_section` in [`super`] uses the fixed name
 //! `msvcrt.dll` and emits one import descriptor, so a libc call such as `printf` runs.
-//! A symbol from `kernel32`, `user32`, or the UCRT goes into the same descriptor and
-//! fails to resolve. Such a program needs [`super::coff`] and `lld-link`.
+//! A symbol from any other DLL goes into the same descriptor and fails to resolve. A
+//! `kernel32` call needs [`super::coff`] and `lld-link`.
 //!
 //! Data directory entry 12 (`IMAGE_DIRECTORY_ENTRY_IAT`) stays zero. The image still
 //! loads, because the loader reads the import directory at entry 1, but some tools
@@ -161,7 +161,7 @@ pub fn create_pe_wrapper(text_code: &[u8], data_content: &[u8], idata_content: &
     pe.extend_from_slice(&size_of_headers.to_le_bytes());
     pe.extend_from_slice(&0u32.to_le_bytes()); // CheckSum
     pe.extend_from_slice(&3u16.to_le_bytes()); // Subsystem: Console
-    pe.extend_from_slice(&(0x0140u16).to_le_bytes()); // DllCharacteristics: DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE
+    pe.extend_from_slice(&(0x0140u16).to_le_bytes()); // DllCharacteristics: DYNAMIC_BASE | NX_COMPAT
     pe.extend_from_slice(&0x0010_0000u64.to_le_bytes()); // SizeOfStackReserve (1MB)
     pe.extend_from_slice(&0x0000_1000u64.to_le_bytes()); // SizeOfStackCommit (4KB)
     pe.extend_from_slice(&0x0010_0000u64.to_le_bytes()); // SizeOfHeapReserve (1MB)

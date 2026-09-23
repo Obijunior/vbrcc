@@ -596,10 +596,16 @@ impl Parser {
     // --- Expression parsing with precedence climbing ---
     //
     // Precedence (low to high):
-    //   1. + -          (additive)
-    //   2. * /          (multiplicative)
-    //   3. unary - ~ !  (unary)
-    //   4. literals, identifiers, ( expr )
+    //   assignment  = += -= ...   (right-assoc)
+    //   ternary     ?:            (right-assoc)
+    //   ||, &&, |, ^, &
+    //   comparison  < <= > >= == !=   (one level; C puts == and != below the others)
+    //   shift       << >>
+    //   additive    + -
+    //   multiplicative  * / %
+    //   unary       cast - ~ ! & *
+    //   postfix     [] . -> ++ --
+    //   primary     literal, identifier, call, ( expr )
 
     fn parse_expr(&mut self) -> Result<TypedExpr, CompileError> {
         self.parse_assignment()
@@ -608,14 +614,6 @@ impl Parser {
     fn parse_assignment(&mut self) -> Result<TypedExpr, CompileError> {
         let lhs = self.parse_ternary()?;
         let start_span = lhs.span;
-
-        // postfix ++ / --
-        if self.current() == &Token::PlusPlus || self.current() == &Token::MinusMinus {
-            let op = if self.current() == &Token::PlusPlus { IncDec::Inc } else { IncDec::Dec };
-            self.advance();
-            let span = start_span.to(self.previous_span());
-            return Ok(TypedExpr::new(Expr::PostIncDec(op, Box::new(lhs)), span));
-        }
 
         let assign_op = match self.current() {
             Token::Assign => Some(None),
@@ -974,6 +972,13 @@ impl Parser {
                     let span = start.to(self.previous_span());
                     let deref = TypedExpr::new(Expr::Deref(Box::new(expr)), span);
                     expr = TypedExpr::new(Expr::Member(Box::new(deref), field), span);
+                }
+                Token::PlusPlus | Token::MinusMinus => {
+                    let op = if self.current() == &Token::PlusPlus { IncDec::Inc } else { IncDec::Dec };
+                    let start = expr.span;
+                    self.advance();
+                    let span = start.to(self.previous_span());
+                    expr = TypedExpr::new(Expr::PostIncDec(op, Box::new(expr)), span);
                 }
                 _ => break,
             }
@@ -1952,6 +1957,15 @@ mod tests {
         }
     }
 
-
-
+    #[test]
+    fn postfix_increment_binds_tighter_than_deref() {
+        // `*p++` is `*(p++)`, not `(*p)++`.
+        assert_eq!(
+            expr_of("*p++;"),
+            Expr::Deref(Box::new(e(Expr::PostIncDec(
+                IncDec::Inc,
+                Box::new(e(Expr::Var("p".into()))),
+            )))),
+        );
+    }
 }

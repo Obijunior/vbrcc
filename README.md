@@ -41,9 +41,8 @@ vbrcc --version    # or -v
 vbrcc --help       # or -h
 ```
 
-VBRCC compiles one C file. It writes an assembly file and an executable. On
-success it is silent unless you pass `--verbose`.
-
+VBRCC compiles one C file to an executable. It deletes the intermediate assembly file
+unless you pass `--keep-artifacts`. On success it is silent unless you pass `--verbose`.
 
 ```console
 $ vbrcc examples/return42.c -o program --verbose
@@ -64,6 +63,8 @@ $ vbrcc examples/return42.c -o program --verbose
 | `--lld-link` | Emit a COFF object and link it with `lld-link` |
 | `--keep-artifacts` | Keep intermediate `.s` / `.obj` files |
 | `--verbose` | Print progress messages (written paths, section sizes); silent otherwise |
+| `-E` | Print the preprocessed source and exit |
+| `-I <dir>` | Add a directory to the `#include` search path (`-Idir` also works) |
 | `-h`, `--help` | Print the option list |
 | `-v`, `--version` | Print version information |
 
@@ -85,11 +86,10 @@ $ ./input.exe
 hello world - sum: 52
 ```
 
-> **Use `--lld-link` for a program that imports from more than one DLL.** The import
-> table of the default backend covers one DLL, `msvcrt.dll`. A program that also calls
-> into `kernel32`, `user32`, or the UCRT does not resolve those symbols yet. Use
-> `--lld-link` for such a program. A C runtime call such as `printf` works with no extra
-> setup.
+> **Use `--lld-link` for a `kernel32` call.** The import table of the default backend
+> covers one DLL, `msvcrt.dll`, so a C runtime call such as `printf` needs no extra
+> setup. `--lld-link` adds `kernel32`. A call into any other DLL, such as `user32`,
+> builds with either backend and then fails at load time.
 
 ### Debugging output
 
@@ -132,7 +132,7 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 
 | Feature | Example |
 | --- | --- |
-| Integer literals | `42` |
+| Integer literals | `42` (decimal only) |
 | String literals | `"hello\n"` |
 | Character literals | `'a'`, `'\0'`, `'\n'` |
 | Variables | `x`, `sum` |
@@ -149,7 +149,10 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 | Address-of / dereference | `&x`, `*p` |
 | Array index | `a[i]` |
 | Struct member access | `s.x`, `p->x` |
-| Cast | `(char)x`, `(int *)p` |
+| Cast | `(int *)p` |
+
+> **A cast changes the type, not the value.** The code generator does not truncate or
+> extend the operand yet, so `(char)300` is still 300 and `(_Bool)5` is still 5.
 
 > **Four arguments is the limit.** This applies to a function's parameter list and to a
 > call's argument list. Win64 passes the first four in registers. VBRCC does not write
@@ -198,7 +201,7 @@ example a dereference of a value that is not a pointer.
 > **`_Bool` is its own type, 1 byte wide, not an alias for `int` or `char`.** A store
 > through a `_Bool` lvalue normalizes the value first: any nonzero value becomes exactly
 > `1`, per C99 6.3.1.2. Integer promotion and the usual arithmetic conversions are not
-> implemented yet for any type, `_Bool` included — see the roadmap.
+> implemented yet for any type, `_Bool` included.
 
 ### Statements and control flow
 
@@ -225,6 +228,12 @@ example a dereference of a value that is not a pointer.
 * `unsigned`, `float`, and `double`
 * `switch`, `do-while`, `break`, and `continue`
 * `sizeof`
+* An empty `for` clause, such as `for (;;)`, and `return;` with no value
+* A bare `{ ... }` block and the empty statement `;`
+* Hex and octal literals. A leading `0` does not make a literal octal, so `010` is 10
+* A string literal that holds `'`, `\r`, or a non-ASCII character. The assembler rejects it
+* Escape sequences other than `\n`, `\t`, `\r`, `\0`, `\"`, `\'`, and `\\`
+* A string initializer for a pointer, such as a global `char *s = "hi";`
 * The comma operator, and pre-increment and pre-decrement (`++i`, `--i`)
 * The storage-class and function specifiers `static`, `extern`, `inline`, and `register`
 * Designated initializers (`{ .x = 1, [3] = 7 }`), compound literals, and a string
@@ -234,7 +243,8 @@ example a dereference of a value that is not a pointer.
 * Block-level scope. Every variable shares one flat scope for each function
 * A self-referential `struct`, a bitfield, and a braced `struct` initializer
 * `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`
-* Imports from more than one DLL in the default backend. Use `--lld-link`
+* Imports from a DLL other than `msvcrt.dll` in the default backend, or other than
+  `msvcrt.dll` and `kernel32` with `--lld-link`
 
 ## Preprocessor
 
@@ -252,10 +262,8 @@ example a dereference of a value that is not a pointer.
 
 A small header set ships inside the binary, so an install needs no data files:
 `limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, and `stdlib.h`.
-They are small on purpose. Each one uses `typedef` and a macro where a language feature
-is still missing. For example, `size_t` is `typedef`'d to `long long` in `stddef.h`, but
-`bool` is still a macro for `_Bool` since `stdbool.h`'s job is only to spell the keyword
-the way C99 expects.
+They declare only what the compiler can use. `size_t` is a `typedef` of `long long`,
+because `unsigned` does not exist yet.
 
 `-E` prints the preprocessed source and exits. This is the fastest way to see what
 expansion produced.
@@ -305,8 +313,8 @@ The built-in assembler (`src/assembler/`) accepts a small subset of Intel-syntax
 - **PE executable** (default). The assembler encodes the instructions and writes a
   complete Windows PE32+ image. The image has a DOS header, a COFF header, a section
   table, and a working import table. A call into `msvcrt.dll`, such as `printf`,
-  resolves through that table and runs. The table covers one DLL, so a program that also
-  imports from `kernel32`, `user32`, or the UCRT needs `--lld-link`.
+  resolves through that table and runs. The table covers one DLL, so a `kernel32` call
+  needs `--lld-link`.
 - **COFF object** (used by `--lld-link`). The assembler writes a relocatable object file
   with a symbol table and `IMAGE_REL_AMD64_REL32` relocations, for `lld-link` to resolve.
 
@@ -344,15 +352,18 @@ cargo test
 
 **Done**
 
-- Multiple integer types (`int`, `char`, `long`) and `void`
+- Multiple integer types (`int`, `char`, `long`, `long long`) and `void`
 - `_Bool` (C99 6.3.1.2 store normalization)
 - A type checker with source-located type errors
 - Pointers, address-of, dereference, and pointer arithmetic
-- Arrays and array indexing
-- Cast expressions
+- Arrays, array indexing, and multi-dimensional arrays
+- Brace initializers for arrays, local and global
+- Global variables with constant initializers
+- Cast expressions (type only, see above)
 - A built-in PE import table: single-DLL libc calls (`printf` and friends via `msvcrt.dll`)
   run through the default backend with no `--lld-link`
 - `typedef`
+- `enum`
 - The bitwise operators `&`, `|`, `^`, `<<`, `>>`, and their compound assignments
 - The ternary conditional operator `?:`
 - `struct`: member access, whole-struct copy, pass and return by value, and globals

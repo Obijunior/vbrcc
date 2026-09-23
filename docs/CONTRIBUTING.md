@@ -1,7 +1,5 @@
 # Contributing to VBRCC
 
-Thank you for your interest in the project.
-
 ## Project status: issues are welcome, pull requests are not
 
 VBRCC is a personal learning project. The internals change too fast for an outside
@@ -84,15 +82,14 @@ executables it writes do not run there.
 ```sh
 cargo test                       # everything
 cargo test --lib assembler       # the assembler unit tests only
-cargo test --test full_compilation
+cargo test --test structs         # one integration test file
 ```
 
-The integration tests are in `tests/`, in one file for each area:
-`lexer_pipeline.rs`, `parser_pipeline.rs`, `diagnostics.rs`, `pointers.rs`,
-`increment.rs`, `call_args.rs`, `preprocessor.rs`, `entry_point.rs`,
-`assembler_test.rs`, `full_compilation.rs`, and `lld_link_test.rs`.
+The integration tests are in `tests/`, in one file for each area, such as `structs.rs`
+or `preprocessor.rs`.
 
-The `lld_link_test.rs` suite needs LLVM. It fails without it.
+The `lld_link_test.rs` suite needs LLVM. It skips each test when `lld-link` is not on
+the `PATH`.
 
 Several suites compile a C file and then run the binary. They report a skip and pass
 when the host cannot run a PE, which keeps the Linux CI job green.

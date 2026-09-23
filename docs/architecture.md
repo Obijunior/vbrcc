@@ -27,7 +27,7 @@ C source
  tokens (each token has a span tagged with the file it came from)
    │
    ▼
- Parser         →  AST (a Program of functions)
+ Parser         →  AST (a Program)
    │
    ▼
  Type checker   →  the same AST, with a type on each expression
@@ -111,10 +111,10 @@ for the next-higher precedence level.
 
 The parser produces these top-level types (see `src/ast.rs`):
 
-- `Program` — a list of functions.
-- `Function` — a name, typed parameters, a return type, and a body of statements.
-- `Stmt` — a statement, for example `Return`, `VarDecl`, `If`, `While`, or `For`.
-- `Expr` — an expression, for example a literal, a variable, a binary operation,
+- `Program`: the function definitions, the prototypes, and the global variables.
+- `Function`: a name, typed parameters, a return type, and a body of statements.
+- `Stmt`: a statement, for example `Return`, `VarDecl`, `If`, `While`, or `For`.
+- `Expr`: an expression, for example a literal, a variable, a binary operation,
   an assignment, an address-of, a dereference, an index, or a cast.
 
 The parser wraps each statement in a `Spanned<Stmt>`. It wraps each expression in
@@ -137,22 +137,27 @@ The type checker also finds these errors:
 - A dereference of a value that is not a pointer.
 - An index of a value that is not a pointer or an array.
 - An assignment to a target that is not an lvalue. An lvalue is a variable, a
-  dereference, or an index.
+  dereference, an index, or a member access.
+- A call with the wrong number of arguments, when a prototype or a definition gives
+  the count.
+- A member access on a value that is not a struct, or of a member the struct does not
+  have.
+- A brace initializer whose shape does not match the declared type.
+
+The type checker does not compare types across an assignment, an argument, or a
+`return`. For example, it accepts `int n = s;` where `s` is a struct.
 
 The type checker keeps a scope. The scope is a map from a name to a `Type`. The
 scope is flat. The type checker does not use a separate scope for each block yet.
 
-The `Type` enum holds the type kinds: `Int`, `Char`, `Long`, `LongLong`, `Void`,
-`Enum`, a `Pointer` to a type, and an `Array` of a type and a length. The `Type::size` method and the
-`Type::align` method give the size and the alignment of a type. These two methods
-are the single place that controls sizes. A later phase can change the sizes in
-one place.
+The `Type` enum holds the type kinds: `Int`, `Char`, `Bool`, `Long`, `LongLong`,
+`Void`, `Enum`, `Struct`, a `Pointer` to a type, and an `Array` of a type and a length.
+The `Type::size` and `Type::align` methods are the one place that sets sizes. The code
+generator takes every pointer scale, stack slot size, and load or store width from them.
 
-Sizes follow the Windows LLP64 model: `char` is 1 byte, `int` and `long` are 4,
-and `long long`, pointer, and `void` are 8. An array is its element size times its length. Because these two
-methods are the single source of truth, the code generator scales pointer arithmetic
-and array indexing, sizes each stack slot, and picks the load and store width all
-from the same numbers.
+Sizes follow the Windows LLP64 model: `char` and `_Bool` are 1 byte, `int`, `long`,
+and an enum are 4, and `long long` and a pointer are 8. An array is its element size
+times its length.
 
 ## Stage 4 — Code generator
 
@@ -164,7 +169,8 @@ scale pointer arithmetic and to decay an array to a pointer.
 
 The code generator follows these rules:
 
-- A result always goes into `rax`.
+- A result always goes into `rax`. For a struct or an array, `rax` holds its
+  address, not its bytes.
 - The stack pointer `rsp` does not move after the prologue. To keep an
   intermediate value, the generator saves it to a frame slot with `spill_rax`. It
   does not use `push`.
@@ -214,11 +220,12 @@ The assembler supports two output formats:
   Note: the import table covers one DLL. The `build_import_section` function in
   `assembler/mod.rs` uses the fixed name `msvcrt.dll`. A libc call such as
   `printf` therefore runs through the default backend with no external linker. A
-  call into `kernel32`, `user32`, or the UCRT does not resolve. Use `--lld-link`
-  for a program that imports from more than one DLL.
+  call into `kernel32` does not resolve. Use `--lld-link` for such a program.
 - **A COFF object** (`coff.rs`, for the `--lld-link` path). The assembler writes a
   relocatable object file. The file has a symbol table and relocations. The linker
-  `lld-link` resolves the relocations.
+  `lld-link` resolves the relocations. The driver links `kernel32.lib` and an import
+  library that names `msvcrt.dll` for every other external. A call into any other
+  DLL, such as `user32`, therefore fails at load time.
 
 `relocation.rs` holds the relocation types. `register.rs` holds the register
 enums and helpers.

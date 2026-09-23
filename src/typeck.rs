@@ -10,12 +10,19 @@
 //! - A dereference of a value that is not a pointer.
 //! - An index of a value that is not a pointer or an array.
 //! - An assignment to something that is not an lvalue. An lvalue is a variable, a
-//!   dereference, or an index. The parser accepts any expression to the left of `=`,
-//!   and this stage rejects the invalid ones.
+//!   dereference, an index, or a member access. The parser accepts any expression to
+//!   the left of `=`, and this stage rejects the invalid ones.
 //! - A call with the wrong number of arguments. The signature comes from a prototype
 //!   or from a definition in the same file. A variadic function needs at least its
 //!   named parameters. A call to a name with no declaration is legal, because C89
 //!   permits it, and programs written before `#include` worked depend on it.
+//! - A member access on a non-struct, or of a member the struct does not have.
+//! - A bitwise operator with a non-integer operand.
+//! - A brace initializer whose shape does not match the declared type, and a global
+//!   initializer that is not a constant.
+//!
+//! This stage does not compare types across an assignment, an argument, or a
+//! `return`. It accepts `int n = s;` where `s` is a struct.
 //!
 //! # Scope
 //!
