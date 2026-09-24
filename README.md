@@ -213,7 +213,8 @@ example a dereference of a value that is not a pointer.
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
 | Do-while loops | `do { ... } while (cond);` |
-| Break / continue | `break;`, `continue;` inside a loop |
+| Break / continue | `break;` inside a loop or `switch`, `continue;` inside a loop |
+| Switch | `switch (x) { case 1: ...; break; default: ... }` |
 | Empty `for` clauses | `for (;;) { ... }` |
 | Blocks and the empty statement | `{ ... }`, `;` |
 | If / else | `if (cond) { ... } else { ... }` |
@@ -230,7 +231,7 @@ example a dereference of a value that is not a pointer.
 
 * `union`
 * `unsigned`, `float`, and `double`
-* `switch`
+* A `case` label nested inside a block or a loop in the `switch` body (Duff's device)
 * `sizeof`
 * Hex and octal literals. A leading `0` does not make a literal octal, so `010` is 10
 * A string literal that holds `'`, `\r`, or a non-ASCII character. The assembler rejects it
@@ -370,12 +371,11 @@ cargo test
 - The ternary conditional operator `?:`
 - `struct`: member access, whole-struct copy, pass and return by value, and globals
 - Several names in one declaration, such as `int a, b = 5;`
-- `do`-`while`, `break`, `continue`, empty `for` clauses, blocks, and `return;`
+- `do`-`while`, `switch`, `break`, `continue`, empty `for` clauses, blocks, and `return;`
 
 **Next**
 
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
-- `switch`
 - Designated initializers and compound literals
 - `union`
 - More than four function parameters or call arguments

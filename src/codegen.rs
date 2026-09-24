@@ -497,6 +497,53 @@ impl Codegen {
                 self.emit(&format!("  jmp loop_{}_start", id));
                 self.emit(&format!("loop_{}_end:", id));
             }
+            Stmt::Switch { cond, body } => {
+                let id = self.label_count;
+                self.label_count += 1;
+
+                // Compare the value with each case in turn. A label takes the case's
+                // index, not its value, because a value can be negative.
+                self.gen_expr(cond)?;
+                let cases: Vec<i64> = body
+                    .iter()
+                    .filter_map(|s| match s.node { Stmt::Case(v) => Some(v), _ => None })
+                    .collect();
+                for (i, v) in cases.iter().enumerate() {
+                    if i32::try_from(*v).is_ok() {
+                        self.emit(&format!("  cmp rax, {v}"));
+                    } else {
+                        // `cmp r64, imm32` sign-extends, so a wider value goes through rcx.
+                        self.emit(&format!("  mov rcx, {v}"));
+                        self.emit("  cmp rax, rcx");
+                    }
+                    self.emit(&format!("  je switch_{id}_case_{i}"));
+                }
+                let has_default = body.iter().any(|s| matches!(s.node, Stmt::Default));
+                let miss = if has_default { "default" } else { "end" };
+                self.emit(&format!("  jmp switch_{id}_{miss}"));
+
+                // `break` leaves the switch. `continue` still goes to the enclosing
+                // loop, so `continue_labels` does not change.
+                self.break_labels.push(format!("switch_{id}_end"));
+                let mut case_index = 0;
+                let result = body.iter().try_for_each(|stmt| {
+                    match stmt.node {
+                        Stmt::Case(_) => {
+                            self.emit(&format!("switch_{id}_case_{case_index}:"));
+                            case_index += 1;
+                        }
+                        Stmt::Default => self.emit(&format!("switch_{id}_default:")),
+                        _ => self.gen_statement(stmt)?,
+                    }
+                    Ok(())
+                });
+                self.break_labels.pop();
+                result?;
+                self.emit(&format!("switch_{id}_end:"));
+            }
+            Stmt::Case(_) | Stmt::Default => {
+                unreachable!("the parser allows a case label only at the top of a switch body")
+            }
             Stmt::DoWhile { body, cond } => {
                 let id = self.label_count;
                 self.label_count += 1;

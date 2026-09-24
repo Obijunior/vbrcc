@@ -178,9 +178,15 @@ pub enum Stmt {
     },
     While { cond: TypedExpr, body: Vec<Spanned<Stmt>> },
     DoWhile { body: Vec<Spanned<Stmt>>, cond: TypedExpr },
-    /// The parser allows these only inside a loop.
+    /// The parser allows `break` inside a loop or a `switch`, and `continue` only
+    /// inside a loop.
     Break,
     Continue,
+    /// `Case` and `Default` are labels in the flat `body`, so control falls through
+    /// from one to the next. The parser allows them only at the top level of `body`.
+    Switch { cond: TypedExpr, body: Vec<Spanned<Stmt>> },
+    Case(i64),
+    Default,
     /// An empty init is an empty `Block`. A `None` condition is always true.
     For {
         init: Box<Spanned<Stmt>>,

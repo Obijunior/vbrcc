@@ -260,7 +260,21 @@ fn check_stmt(
 ) -> Result<(), CompileError> {
     match stmt {
         Stmt::Return(Some(e)) | Stmt::Expr(e) => check_expr(e, scope, sigs)?,
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Case(_) | Stmt::Default => {}
+        Stmt::Switch { cond, body } => {
+            check_expr(cond, scope, sigs)?;
+            let is_int = matches!(
+                cond.ty,
+                Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. }
+            );
+            if !is_int {
+                return Err(CompileError::new(
+                    format!("a `switch` needs an integer value, not `{}`", cond.ty.describe()),
+                    cond.span,
+                ));
+            }
+            check_block(body, scope, sigs)?;
+        }
         Stmt::Block(body) => check_block(body, scope, sigs)?,
         Stmt::VarDecl { ty, name, init } => {
             if let Some(e) = init {
@@ -768,6 +782,21 @@ mod tests {
             Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_switch_on_a_pointer_is_an_error() {
+        let err = typecheck("int main() { int x; int *p = &x; switch (p) { case 0: break; } return 0; }")
+            .unwrap_err();
+        assert!(err.message.contains("integer"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_switch_accepts_char_long_long_and_enum() {
+        assert!(typecheck(
+            "enum E { A }; int main() { char c = 1; long long w = 2; enum E e = A; \
+             switch (c) { } switch (w) { } switch (e) { } return 0; }"
+        ).is_ok());
     }
 
     #[test]

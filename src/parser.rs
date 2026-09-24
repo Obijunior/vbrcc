@@ -23,7 +23,7 @@
 //! The type checker fills the type in later. Every statement goes into a
 //! `Spanned<Stmt>`, which keeps the source location for diagnostics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::lexer::{Token, SpannedToken};
 use crate::ast::*;
@@ -39,9 +39,18 @@ pub struct Parser {
     /// has type `int` in C, so the parser substitutes the value at each use and
     /// no later stage ever sees the name.
     enum_constants: HashMap<String, i64>,
-    /// How many loops enclose the current statement. `break` and `continue`
-    /// need at least one.
+    /// How many loops enclose the current statement. `continue` needs at least one.
     loop_depth: usize,
+    /// The open `switch` statements, innermost last. `break` needs a loop or one of
+    /// these.
+    switches: Vec<SwitchScope>,
+}
+
+/// What one open `switch` has seen, to reject a repeat.
+#[derive(Default)]
+struct SwitchScope {
+    values: HashSet<i64>,
+    has_default: bool,
 }
 
 /// What one top-level item turned out to be.
@@ -59,6 +68,7 @@ impl Parser {
             typedefs: HashMap::new(), structs: HashMap::new(),
             enums: HashMap::new(), enum_constants: HashMap::new(),
             loop_depth: 0,
+            switches: Vec::new(),
         }
     }
 
@@ -594,16 +604,32 @@ impl Parser {
                 }
                 return Ok(decls.remove(0));
             }
-            Token::Break | Token::Continue => {
-                let tok = self.advance().clone();
-                if self.loop_depth == 0 {
-                    return Err(CompileError::new(
-                        format!("{} outside a loop", tok.describe()),
-                        start,
-                    ));
+            Token::Break => {
+                self.advance();
+                if self.loop_depth == 0 && self.switches.is_empty() {
+                    return Err(CompileError::new("`break` outside a loop or a `switch`", start));
                 }
                 self.expect(&Token::Semicolon)?;
-                if tok == Token::Break { Stmt::Break } else { Stmt::Continue }
+                Stmt::Break
+            }
+            Token::Continue => {
+                self.advance();
+                if self.loop_depth == 0 {
+                    return Err(CompileError::new("`continue` outside a loop", start));
+                }
+                self.expect(&Token::Semicolon)?;
+                Stmt::Continue
+            }
+            Token::Switch => return self.parse_switch(),
+            // `parse_switch_body` takes a label at the top level of a body. Any
+            // other place is an error.
+            tok @ (Token::Case | Token::Default) => {
+                let message = if self.switches.is_empty() {
+                    format!("{} outside a `switch`", tok.describe())
+                } else {
+                    format!("{} must be at the top level of the `switch` body", tok.describe())
+                };
+                return Err(CompileError::new(message, start));
             }
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
@@ -872,6 +898,63 @@ impl Parser {
         self.expect(&Token::RParen)?;
         let body = self.parse_loop_body()?;
         Ok(Spanned::new(Stmt::While { cond, body }, start.to(self.previous_span())))
+    }
+
+    fn parse_switch(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'switch'
+        self.expect(&Token::LParen)?;
+        let cond = self.parse_expr()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::LBrace)?;
+        self.switches.push(SwitchScope::default());
+        let body = self.parse_switch_body();
+        self.switches.pop();
+        Ok(Spanned::new(Stmt::Switch { cond, body: body? }, start.to(self.previous_span())))
+    }
+
+    /// The statements of a `switch` body, through the closing `}`. `case` and
+    /// `default` are legal here and nowhere deeper.
+    fn parse_switch_body(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+        let mut body = Vec::new();
+        while self.current() != &Token::RBrace && self.current() != &Token::EOF {
+            if matches!(self.current(), Token::Case | Token::Default) {
+                body.push(self.parse_case_label()?);
+            } else {
+                self.parse_statement_into(&mut body)?;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(body)
+    }
+
+    /// `case CONST:` or `default:`. The value folds here, like an enumerator.
+    fn parse_case_label(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        if self.advance() == &Token::Default {
+            self.expect(&Token::Colon)?;
+            let scope = self.switches.last_mut().expect("parse_switch_body checked");
+            if scope.has_default {
+                return Err(CompileError::new("a second `default` in one `switch`", start));
+            }
+            scope.has_default = true;
+            return Ok(Spanned::new(Stmt::Default, start.to(self.previous_span())));
+        }
+
+        let expr = self.parse_ternary()?;
+        let value = match crate::constfold::eval_const(&expr) {
+            Ok(crate::constfold::ConstValue::Int(n)) => n,
+            _ => {
+                return Err(CompileError::new("a `case` value is not a constant", expr.span)
+                    .with_label("expected an integer constant"));
+            }
+        };
+        self.expect(&Token::Colon)?;
+        let scope = self.switches.last_mut().expect("parse_switch_body checked");
+        if !scope.values.insert(value) {
+            return Err(CompileError::new(format!("duplicate `case` value {value}"), start));
+        }
+        Ok(Spanned::new(Stmt::Case(value), start.to(self.previous_span())))
     }
 
     fn parse_do_while(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -2033,6 +2116,91 @@ mod tests {
         // The `break` follows the loop, so no loop encloses it.
         let err = parse_src("int main() { while (0) { } break; }").unwrap_err();
         assert!(err.message.contains("`break`"), "got: {}", err.message);
+    }
+
+    fn switch_err(src: &str) -> CompileError {
+        parse_src(src).unwrap_err()
+    }
+
+    #[test]
+    fn a_switch_parses_into_case_labels_in_a_flat_body() {
+        let program = parse_src(
+            "int main() { switch (1) { case 1: case 2 + 3: break; default: ; } return 0; }",
+        ).unwrap();
+        match &program.functions[0].body[0].node {
+            Stmt::Switch { body, .. } => {
+                assert!(matches!(body[0].node, Stmt::Case(1)));
+                assert!(matches!(body[1].node, Stmt::Case(5)), "case values fold");
+                assert!(matches!(body[2].node, Stmt::Break));
+                assert!(matches!(body[3].node, Stmt::Default));
+            }
+            other => panic!("expected a switch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn break_is_legal_in_a_switch_without_a_loop() {
+        assert!(parse_src("int main() { switch (1) { case 1: break; } return 0; }").is_ok());
+    }
+
+    #[test]
+    fn continue_in_a_switch_still_needs_a_loop() {
+        let err = switch_err("int main() { switch (1) { case 1: continue; } return 0; }");
+        assert!(err.message.contains("`continue`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn case_outside_a_switch_is_an_error() {
+        let src = "int main() { case 1: return 0; }";
+        let err = switch_err(src);
+        assert!(err.message.contains("outside a `switch`"), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find("case").unwrap());
+    }
+
+    #[test]
+    fn default_outside_a_switch_is_an_error() {
+        let err = switch_err("int main() { default: return 0; }");
+        assert!(err.message.contains("outside a `switch`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_duplicate_case_value_is_an_error() {
+        let src = "int main() { switch (1) { case 4: break; case 2 + 2: break; } return 0; }";
+        let err = switch_err(src);
+        assert!(err.message.contains("duplicate `case` value 4"), "got: {}", err.message);
+        assert_eq!(err.span.start, src.rfind("case").unwrap());
+    }
+
+    #[test]
+    fn a_second_default_is_an_error() {
+        let err = switch_err("int main() { switch (1) { default: break; default: break; } return 0; }");
+        assert!(err.message.contains("second `default`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_case_value_must_be_constant() {
+        let err = switch_err("int main() { int x = 1; switch (1) { case x: break; } return 0; }");
+        assert!(err.message.contains("not a constant"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_case_inside_a_nested_block_is_rejected() {
+        // Duff's device. The plan limits `case` to the top level of the body.
+        let err = switch_err("int main() { switch (1) { case 1: { case 2: break; } } return 0; }");
+        assert!(err.message.contains("top level"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_inner_switch_has_its_own_case_values() {
+        assert!(parse_src(
+            "int main() { switch (1) { case 1: switch (2) { case 1: break; } break; } return 0; }"
+        ).is_ok());
+    }
+
+    #[test]
+    fn a_switch_body_needs_braces() {
+        let err = switch_err("int main() { switch (1) case 1: return 0; }");
+        assert!(err.message.contains("expected `{`"), "got: {}", err.message);
     }
 
     #[test]

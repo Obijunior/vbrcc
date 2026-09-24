@@ -185,7 +185,8 @@ The code generator follows these rules:
 - `break` and `continue` jump to the top of the `break_labels` and
   `continue_labels` stacks. In a `for` loop and a `do`-`while` loop, the `continue`
   target is `loop_N_next`. That label sits before the update or the condition, so
-  `continue` does not skip them.
+  `continue` does not skip them. A `switch` pushes only on `break_labels`, so a
+  `continue` inside it still reaches the enclosing loop.
 
 The rule about `push` is a correctness rule, not a style rule. A callee measures
 its 32 bytes of shadow space from `rsp`. A `push` moves `rsp` down by 8, so the
