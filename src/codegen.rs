@@ -821,6 +821,15 @@ impl Codegen {
 
                 self.emit(&format!("  call {}", name));
 
+                // Win64 defines only the low bits of a narrow return value, and msvcrt
+                // leaves the rest unset. Extend it, so a 64-bit compare sees the C value.
+                match &expr.ty {
+                    Type::Bool => self.emit("  movzx rax, al"),
+                    Type::Char => self.emit("  movsx rax, al"),
+                    Type::Int | Type::Long | Type::Enum { .. } => self.emit("  movsxd rax, eax"),
+                    _ => {}
+                }
+
                 // Keep the rule that every struct-typed expression leaves an
                 // ADDRESS in rax. A memory return already has one; a register
                 // return holds the bytes, so spill them to a slot.
@@ -1348,6 +1357,26 @@ mod tests {
         let asm = compile("_Bool b = 5; int main() { return b; }");
         assert!(asm.contains("b:"), "asm:\n{asm}");
         assert!(asm.contains(".byte 1"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_call_result_is_extended_to_its_type() {
+        // Win64 defines only the low bits of a narrow return value.
+        let asm = compile(
+            "int f(void); char g(void); _Bool h(void); long long k(void);              int main() { f(); g(); h(); k(); return 0; }",
+        );
+        assert!(asm.contains("call f
+  movsxd rax, eax"), "asm:
+{asm}");
+        assert!(asm.contains("call g
+  movsx rax, al"), "asm:
+{asm}");
+        assert!(asm.contains("call h
+  movzx rax, al"), "asm:
+{asm}");
+        assert!(!asm.contains("call k
+  movs"), "a 64-bit result needs nothing:
+{asm}");
     }
 
     #[test]

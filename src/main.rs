@@ -131,7 +131,12 @@ fn main() {
     enable_ansi();
 
     // --- Stage 1: Preprocess ---
-    let spanned_tokens = preprocessor::Preprocessor::with_search_path(&mut sources, include_dirs)
+    let mut pp = preprocessor::Preprocessor::with_search_path(&mut sources, include_dirs);
+    if use_gcc {
+        // A MinGW toolchain links a different C runtime. `stdio.h` reads this.
+        pp.predefine("__VBRCC_MINGW_LINK__", 1);
+    }
+    let spanned_tokens = pp
         .run(main_file)
         .unwrap_or_else(|e| {
             eprint!("{}", diagnostic::render(&sources, &e, use_color));

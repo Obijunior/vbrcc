@@ -18,6 +18,11 @@ static BUNDLED: &[(&str, &str)] = &[
     ("stdio.h", include_str!("../headers/stdio.h")),
     ("string.h", include_str!("../headers/string.h")),
     ("stdlib.h", include_str!("../headers/stdlib.h")),
+    ("ctype.h", include_str!("../headers/ctype.h")),
+    ("errno.h", include_str!("../headers/errno.h")),
+    ("assert.h", include_str!("../headers/assert.h")),
+    ("time.h", include_str!("../headers/time.h")),
+    ("iso646.h", include_str!("../headers/iso646.h")),
 ];
 
 #[derive(Debug)]
@@ -93,7 +98,8 @@ mod tests {
 
     #[test]
     fn every_bundled_header_carries_an_include_guard() {
-        for (name, text) in BUNDLED {
+        // C99 7.2: `assert.h` has no guard, so each inclusion reads NDEBUG again.
+        for (name, text) in BUNDLED.iter().filter(|(n, _)| *n != "assert.h") {
             assert!(text.contains("#ifndef _VBRCC_"), "{name} has no guard");
             assert!(text.contains("#endif"), "{name} has no #endif");
         }

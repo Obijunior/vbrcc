@@ -158,6 +158,11 @@ impl<'a> Preprocessor<'a> {
         }
     }
 
+    /// Predefine `name` as `value`, as `-D name=value` does for other compilers.
+    pub fn predefine(&mut self, name: &str, value: i64) {
+        self.macros.define_int(name, value);
+    }
+
     /// Preprocess `entry` and everything it pulls in.
     pub fn run(mut self, entry: FileId) -> Result<Vec<SpannedToken>, CompileError> {
         self.entry = entry;

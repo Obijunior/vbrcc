@@ -85,6 +85,10 @@ fn cases() -> Vec<(String, String)> {
     for d in R64 {
         for s in R8_LOW {
             same(&mut v, format!("movzx {d}, {s}"));
+            same(&mut v, format!("movsx {d}, {s}"));
+        }
+        for s in R32 {
+            same(&mut v, format!("movsxd {d}, {s}"));
         }
     }
     for b in R64 {

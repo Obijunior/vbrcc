@@ -150,6 +150,20 @@ The API documentation is on [docs.rs](https://docs.rs/vbrcc). To build it locall
 cargo doc --no-deps --open
 ```
 
+### Add a bundled header
+
+1. Write `src/headers/NAME.h` with an include guard `_VBRCC_NAME_H`. Declare only
+   functions that `msvcrt.dll` exports. Check a name with
+   `objdump -p C:/Windows/System32/msvcrt.dll | grep -w NAME`. A missing name builds
+   and then fails at load time.
+2. Add the file to `BUNDLED` in `src/preprocessor/include.rs`.
+3. Add the name to `each_bundled_header_parses_on_its_own` in `tests/preprocessor.rs`.
+4. Add a `tests/c/lib_NAME.c` program that calls the functions.
+5. Add the name to the header list in `README.md`.
+
+A header in a `-I` directory replaces a bundled header of the same name, with no
+rebuild.
+
 ## Documentation style
 
 Write documentation in **ASD-STE100 Simplified Technical English**. Keep one idea in one

@@ -63,6 +63,19 @@ impl MacroTable {
     /// `__STDC_VERSION__` is `199901` rather than the standard's `199901L`
     /// because integer suffixes are roadmap item 22 and the lexer cannot
     /// produce one yet.
+    /// Define `name` as an object-like macro whose body is one integer.
+    pub fn define_int(&mut self, name: &str, value: i64) {
+        self.define(
+            name,
+            MacroDef {
+                kind: MacroKind::Object {
+                    body: vec![SpannedToken { token: Token::IntLiteral(value), span: Span::dummy() }],
+                },
+                name_span: Span::dummy(),
+            },
+        );
+    }
+
     pub fn with_predefined() -> MacroTable {
         let mut t = MacroTable::new();
 
@@ -72,18 +85,7 @@ impl MacroTable {
             ("_WIN32", 1),
             ("_WIN64", 1),
         ] {
-            t.define(
-                name,
-                MacroDef {
-                    kind: MacroKind::Object {
-                        body: vec![SpannedToken {
-                            token: Token::IntLiteral(value),
-                            span: Span::dummy(),
-                        }],
-                    },
-                    name_span: Span::dummy(),
-                },
-            );
+            t.define_int(name, value);
         }
 
         for (name, builtin) in [("__FILE__", Builtin::File), ("__LINE__", Builtin::Line)] {

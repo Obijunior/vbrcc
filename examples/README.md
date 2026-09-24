@@ -101,9 +101,9 @@ DLL, such as `user32`, builds and then fails at load time.
 
 Several of these files start with `#include <stdio.h>`, and the line does real work. The
 bundled `stdio.h` declares `printf`, and that declaration lets the type checker verify
-the call. A small header set ships inside the binary: `stdio.h`, `stdlib.h`, `string.h`,
-`stdbool.h`, `stddef.h`, `stdint.h`, and `limits.h`. The `-I <dir>` flag adds a search
-directory, and a header there replaces a bundled header of the same name.
+the call. A header set ships inside the binary. The README lists it and what each header
+leaves out. The `-I <dir>` flag adds a search directory, and a header there replaces a
+bundled header of the same name.
 
 `vbrcc file.c -E` prints the preprocessed source and exits. This is the fastest way to
 see what macro expansion produced.

@@ -263,10 +263,18 @@ example a dereference of a value that is not a pointer.
 | `#pragma once` | Every other pragma is ignored |
 | Predefined | `__FILE__`, `__LINE__`, `__STDC__`, `__STDC_VERSION__`, `_WIN32`, `_WIN64` |
 
-A small header set ships inside the binary, so an install needs no data files:
-`limits.h`, `stddef.h`, `stdbool.h`, `stdint.h`, `stdio.h`, `string.h`, and `stdlib.h`.
-They declare only what the compiler can use. `size_t` is a `typedef` of `long long`,
-because `unsigned` does not exist yet.
+A header set ships inside the binary, so an install needs no data files: `assert.h`,
+`ctype.h`, `errno.h`, `iso646.h`, `limits.h`, `stdbool.h`, `stddef.h`, `stdint.h`,
+`stdio.h`, `stdlib.h`, `string.h`, and `time.h`. Each one declares only functions that
+`msvcrt.dll` exports and that the compiler can call. So a header can be partial:
+
+- `size_t` is a `typedef` of `long long`, because `unsigned` does not exist yet.
+- A function that needs `double`, a function pointer, or `va_list` is left out, for
+  example `difftime`, `qsort`, and `vprintf`.
+- `snprintf` is left out. msvcrt has only `_snprintf`, which does not end a truncated
+  string with a NUL.
+- `assert` prints a fixed message, not the failed expression, until the preprocessor
+  supports `#` stringizing.
 
 `-E` prints the preprocessed source and exits. This is the fastest way to see what
 expansion produced.

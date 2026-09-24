@@ -165,7 +165,10 @@ fn bundled_header_reaches_e_output() {
 /// `stdlib.h` used `size_t` without including `stddef.h`.
 #[test]
 fn each_bundled_header_parses_on_its_own() {
-    for h in ["limits.h", "stddef.h", "stdbool.h", "stdint.h", "stdio.h", "string.h", "stdlib.h"] {
+    for h in [
+        "limits.h", "stddef.h", "stdbool.h", "stdint.h", "stdio.h", "string.h", "stdlib.h",
+        "ctype.h", "errno.h", "assert.h", "time.h", "iso646.h",
+    ] {
         let src = format!("#include <{h}>\nint main() {{ return 0; }}\n");
         let mut map = SourceMap::single("test.c", &src);
         let toks = Preprocessor::new(&mut map).run(0).unwrap();

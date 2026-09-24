@@ -137,6 +137,8 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::MovRegImm64 { .. } => 10,
         Instruction::MovRegReg { .. } => 3,
         Instruction::MovzxReg64Reg8 { .. } => 4,
+        Instruction::MovsxReg64Reg8 { .. } => 4,
+        Instruction::MovsxdReg64Reg32 { .. } => 3,
         Instruction::MovMemDispReg { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
         Instruction::MovRegMemDisp { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
         Instruction::MovMemDispReg8 { base, src, disp } => {
@@ -216,6 +218,17 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             vec![r, 0x0F, 0xB6, m]
         }
         
+        Instruction::MovsxReg64Reg8 { dst, src } => {
+            // REX.W + 0F BE /r is MOVSX r64, r/m8
+            let r = rex(true, dst.ext(), false, src.ext());
+            vec![r, 0x0F, 0xBE, modrm(0b11, dst.low3(), src.low3())]
+        }
+        Instruction::MovsxdReg64Reg32 { dst, src } => {
+            // REX.W + 63 /r is MOVSXD r64, r/m32
+            let r = rex(true, dst.ext(), false, src.ext());
+            vec![r, 0x63, modrm(0b11, dst.low3(), src.low3())]
+        }
+
         Instruction::MovMemDispReg8 { base, disp, src } => {
             // 0x88 = MOV r/m8, r8. No REX.W.
             let mut out = Vec::new();

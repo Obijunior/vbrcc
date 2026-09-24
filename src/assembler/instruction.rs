@@ -42,6 +42,8 @@ pub enum Instruction {
     MovsxReg64Mem8  { dst: Register64, base: Register64, disp: i32 },
     MovsxReg64Mem16 { dst: Register64, base: Register64, disp: i32 },
     MovsxdReg64Mem32 { dst: Register64, base: Register64, disp: i32 },
+    MovsxReg64Reg8  { dst: Register64, src: Register8 },
+    MovsxdReg64Reg32 { dst: Register64, src: Register64 },
 
     AddRegReg { dst: Register64, src: Register64 },
     AddRegImm32 { dst: Register64, imm: i32 },
@@ -550,6 +552,14 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             }
             let dst = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
+            // Register source: `movsx rax, al` and `movsxd rax, eax`.
+            if opcode == "movsx" {
+                if let Some(src) = parse_register8(operands[1]) {
+                    return Ok(AsmLine::Instruction(Instruction::MovsxReg64Reg8 { dst, src }));
+                }
+            } else if let Some(src) = parse_narrow_register(operands[1], 4) {
+                return Ok(AsmLine::Instruction(Instruction::MovsxdReg64Reg32 { dst, src }));
+            }
             let (w, mem_str) = parse_size_prefix(operands[1]);
             let (base, disp) = parse_mem_operand(mem_str)
                 .ok_or_else(|| format!("[ ERROR ] :: {} expects a memory operand: {}", opcode, raw))?;
