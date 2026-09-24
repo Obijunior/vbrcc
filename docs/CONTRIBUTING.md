@@ -92,7 +92,18 @@ The `lld_link_test.rs` suite needs LLVM. It skips each test when `lld-link` is n
 the `PATH`.
 
 Several suites compile a C file and then run the binary. They report a skip and pass
-when the host cannot run a PE, which keeps the Linux CI job green.
+when the host cannot run a PE, which keeps the Linux CI job green. Their shared helpers
+are in `tests/common/mod.rs`. Each run has a 10-second limit, so an endless loop fails.
+
+**To test a miscompile, add a C program to `tests/c/`.** No Rust change is needed.
+The first line is `// expect: N`, the exit code. An `// expect-stdout: text` line is
+optional. `tests/c_programs.rs` builds the program with `vbrcc`, with `vbrcc --gcc`, and
+with native `gcc`, and all three must agree with the expectation. A program for a bug
+that is still open goes in `tests/c/known_bugs/`. That test fails when the bug is fixed,
+as a reminder to move the file up to `tests/c/`.
+
+`encoder_vs_gas.rs` compares every instruction form with GNU `as`. It needs `as` and
+`objdump` on the `PATH`, and skips without them.
 
 > **Take care with spans in a test.** `Span` implements `PartialEq` so that it compares
 > equal to *every* other `Span`. This lets a test compare AST nodes by structure. It

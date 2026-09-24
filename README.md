@@ -207,11 +207,15 @@ example a dereference of a value that is not a pointer.
 
 | Feature | Example |
 | :--- | :--- |
-| Return | `return expr;` |
+| Return | `return expr;`, `return;` |
 | Variable declaration | `int x = 0;`, `char c;`, `int *p;`, `int a[10];` |
 | Several names in one declaration | `int a, b = 5;`, `char c, *p, buf[8];` |
 | For loops | `for (int i = 0; i < 10; i++) { ... }` |
 | While loops | `while (cond) { ... }` |
+| Do-while loops | `do { ... } while (cond);` |
+| Break / continue | `break;`, `continue;` inside a loop |
+| Empty `for` clauses | `for (;;) { ... }` |
+| Blocks and the empty statement | `{ ... }`, `;` |
 | If / else | `if (cond) { ... } else { ... }` |
 | Single-statement bodies | `while (c) x++;`, `if (c) return 1;` |
 | Logical AND / OR | `&&`, `\|\|` |
@@ -226,10 +230,8 @@ example a dereference of a value that is not a pointer.
 
 * `union`
 * `unsigned`, `float`, and `double`
-* `switch`, `do-while`, `break`, and `continue`
+* `switch`
 * `sizeof`
-* An empty `for` clause, such as `for (;;)`, and `return;` with no value
-* A bare `{ ... }` block and the empty statement `;`
 * Hex and octal literals. A leading `0` does not make a literal octal, so `010` is 10
 * A string literal that holds `'`, `\r`, or a non-ASCII character. The assembler rejects it
 * Escape sequences other than `\n`, `\t`, `\r`, `\0`, `\"`, `\'`, and `\\`
@@ -296,7 +298,7 @@ The built-in assembler (`src/assembler/`) accepts a small subset of Intel-syntax
   - `mov byte ptr [reg +/- disp], <reg>` and `mov dword ptr [reg +/- disp], <reg>`
     (narrow stores)
   - `movzx <reg64>, <reg8>`
-  - `movsx <reg64>, byte ptr [reg +/- disp]` and
+  - `movsx <reg64>, byte ptr [reg +/- disp]`, `movsx <reg64>, word ptr [reg +/- disp]`, and
     `movsxd <reg64>, dword ptr [reg +/- disp]` (sign-extending narrow loads)
   - `add <reg>, <reg|imm32>`, `sub <reg>, <reg|imm32>`
   - `imul <reg>, <reg|imm32>`
@@ -368,11 +370,12 @@ cargo test
 - The ternary conditional operator `?:`
 - `struct`: member access, whole-struct copy, pass and return by value, and globals
 - Several names in one declaration, such as `int a, b = 5;`
+- `do`-`while`, `break`, `continue`, empty `for` clauses, blocks, and `return;`
 
 **Next**
 
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
-- More control flow: `do-while`, `break`, `continue`, `switch`
+- `switch`
 - Designated initializers and compound literals
 - `union`
 - More than four function parameters or call arguments

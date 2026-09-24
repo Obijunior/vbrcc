@@ -19,4 +19,5 @@ release.sh
 # ...but sample programs and test fixtures are source, not artifacts
 !examples/*.c
 !tests/*.c
+!tests/c/**/*.c
 !tests/*.s

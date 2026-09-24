@@ -164,8 +164,12 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Return(TypedExpr),
+    /// `None` is `return;`.
+    Return(Option<TypedExpr>),
     Expr(TypedExpr),
+    /// A braced block, or the empty statement `;` as an empty list. Scope is flat,
+    /// so a block adds no scope of its own.
+    Block(Vec<Spanned<Stmt>>),
     VarDecl { ty: Type, name: String, init: Option<TypedExpr> },
     If {
         cond: TypedExpr,
@@ -173,10 +177,15 @@ pub enum Stmt {
         else_branch: Vec<Spanned<Stmt>>,
     },
     While { cond: TypedExpr, body: Vec<Spanned<Stmt>> },
+    DoWhile { body: Vec<Spanned<Stmt>>, cond: TypedExpr },
+    /// The parser allows these only inside a loop.
+    Break,
+    Continue,
+    /// An empty init is an empty `Block`. A `None` condition is always true.
     For {
         init: Box<Spanned<Stmt>>,
-        cond: TypedExpr,
-        update: Box<Spanned<Stmt>>,
+        cond: Option<TypedExpr>,
+        update: Option<TypedExpr>,
         body: Vec<Spanned<Stmt>>,
     },
 }

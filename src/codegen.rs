@@ -48,6 +48,9 @@ pub struct Codegen {
     /// return type is a struct passed in memory. `None` otherwise. Set per
     /// function in `gen_function`.
     hidden_ret: Option<i64>,
+    /// Jump targets for `break` and `continue`, innermost last.
+    break_labels: Vec<String>,
+    continue_labels: Vec<String>,
 }
 
 impl Codegen {
@@ -61,6 +64,8 @@ impl Codegen {
             stack_offset: 0,
             label_count: 0,
             hidden_ret: None,
+            break_labels: Vec::new(),
+            continue_labels: Vec::new(),
         }
     }
 
@@ -89,17 +94,29 @@ impl Codegen {
     fn emit_load(&mut self, addr: &str, width: usize) {
         match width {
             1 => self.emit(&format!("  movsx rax, byte ptr {}", addr)),
+            2 => self.emit(&format!("  movsx rax, word ptr {}", addr)),
             4 => self.emit(&format!("  movsxd rax, dword ptr {}", addr)),
-            _ => self.emit(&format!("  mov rax, {}", addr)),
+            8 => self.emit(&format!("  mov rax, {}", addr)),
+            _ => unreachable!("no {width}-byte load"),
         }
     }
 
     /// Store the low `width` bytes of `src` (a 64-bit reg name) to `addr`.
+    /// A narrow store names the narrow register (`eax`, `al`). GNU `as` rejects a
+    /// 64-bit name there, which would break `--gcc`.
     fn emit_store(&mut self, addr: &str, src: &str, width: usize) {
+        let narrow = |w: usize| match (src, w) {
+            ("rax", 1) => "al",
+            ("rax", 4) => "eax",
+            ("rcx", 1) => "cl",
+            ("rcx", 4) => "ecx",
+            _ => unreachable!("no {w}-byte name for {src}"),
+        };
         match width {
-            1 => self.emit(&format!("  mov byte ptr {}, {}", addr, src)),
-            4 => self.emit(&format!("  mov dword ptr {}, {}", addr, src)),
-            _ => self.emit(&format!("  mov {}, {}", addr, src)),
+            1 => self.emit(&format!("  mov byte ptr {}, {}", addr, narrow(1))),
+            4 => self.emit(&format!("  mov dword ptr {}, {}", addr, narrow(4))),
+            8 => self.emit(&format!("  mov {}, {}", addr, src)),
+            _ => unreachable!("no {width}-byte store"),
         }
     }
 
@@ -380,7 +397,8 @@ impl Codegen {
     }
     fn gen_statement(&mut self, stmt: &Spanned<Stmt>) -> Result<(), CompileError> {
         match &stmt.node {
-            Stmt::Return(expr) => {
+            Stmt::Return(None) => self.emit_epilogue(),
+            Stmt::Return(Some(expr)) => {
                 match &expr.ty {
                     Type::Struct { size, .. } if self.hidden_ret.is_some() => {
                         let size = *size;
@@ -408,19 +426,38 @@ impl Codegen {
                 self.gen_statement(init)?;
                 self.emit(&format!("loop_{}_start:", id));
 
-                self.gen_expr(cond)?;
-                self.emit("  cmp rax, 0");
-                self.emit(&format!("  je loop_{}_end", id));
-
-                for stmt in body {
-                    self.gen_statement(stmt)?;
+                if let Some(cond) = cond {
+                    self.gen_expr(cond)?;
+                    self.emit("  cmp rax, 0");
+                    self.emit(&format!("  je loop_{}_end", id));
                 }
-                self.gen_statement(update)?;
+
+                // `continue` goes to `next`, so it still runs the update.
+                self.gen_loop_body(body, format!("loop_{id}_end"), format!("loop_{id}_next"))?;
+                self.emit(&format!("loop_{}_next:", id));
+                if let Some(update) = update {
+                    self.gen_expr(update)?;
+                }
                 self.emit(&format!("  jmp loop_{}_start", id));
                 self.emit(&format!("loop_{}_end:", id));
             }
             Stmt::Expr(expr) => {
                 self.gen_expr(expr)?;
+            }
+            Stmt::Block(body) => {
+                for stmt in body {
+                    self.gen_statement(stmt)?;
+                }
+            }
+            // `rsp` does not move after the prologue, so a jump out of any depth
+            // needs no stack cleanup. The parser has checked that a loop encloses it.
+            Stmt::Break => {
+                let target = self.break_labels.last().expect("parser checked the loop").clone();
+                self.emit(&format!("  jmp {target}"));
+            }
+            Stmt::Continue => {
+                let target = self.continue_labels.last().expect("parser checked the loop").clone();
+                self.emit(&format!("  jmp {target}"));
             }
             Stmt::VarDecl { ty, name, init, .. } => {
                 self.stack_offset -= ty.size() as i64;
@@ -455,11 +492,22 @@ impl Codegen {
                 self.emit("  cmp rax, 0");
                 self.emit(&format!("  je loop_{}_end", id));
 
-                for stmt in body {
-                    self.gen_statement(stmt)?;
-                }
+                self.gen_loop_body(body, format!("loop_{id}_end"), format!("loop_{id}_start"))?;
 
                 self.emit(&format!("  jmp loop_{}_start", id));
+                self.emit(&format!("loop_{}_end:", id));
+            }
+            Stmt::DoWhile { body, cond } => {
+                let id = self.label_count;
+                self.label_count += 1;
+
+                self.emit(&format!("loop_{}_start:", id));
+                // `continue` goes to `next`, so it still tests the condition.
+                self.gen_loop_body(body, format!("loop_{id}_end"), format!("loop_{id}_next"))?;
+                self.emit(&format!("loop_{}_next:", id));
+                self.gen_expr(cond)?;
+                self.emit("  cmp rax, 0");
+                self.emit(&format!("  jne loop_{}_start", id));
                 self.emit(&format!("loop_{}_end:", id));
             }
             Stmt::If { cond, then_branch, else_branch } => {
@@ -490,6 +538,21 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    /// Generate a loop body with `break` and `continue` bound to these labels.
+    fn gen_loop_body(
+        &mut self,
+        body: &[Spanned<Stmt>],
+        break_label: String,
+        continue_label: String,
+    ) -> Result<(), CompileError> {
+        self.break_labels.push(break_label);
+        self.continue_labels.push(continue_label);
+        let result = body.iter().try_for_each(|stmt| self.gen_statement(stmt));
+        self.break_labels.pop();
+        self.continue_labels.pop();
+        result
     }
 
     /// Write a brace initializer into the frame, starting at `[rbp + base_off]`.
@@ -616,8 +679,7 @@ impl Codegen {
                 4 => self.emit(&format!("  movsxd rax, dword ptr [r11 + {done}]")),
                 _ => self.emit(&format!("  movsx rax, byte ptr [r11 + {done}]")),
             }
-            let ptr = match w { 8 => "qword ptr", 4 => "dword ptr", _ => "byte ptr" };
-            self.emit(&format!("  mov {ptr} [r10 + {done}], rax"));
+            self.emit_store(&format!("[r10 + {done}]"), "rax", w);
             done += w;
         }
     }
@@ -1037,7 +1099,7 @@ mod tests {
     fn test_var_decl_and_return() {
         let asm = compile("int main() { int x = 5; return x; }");
         assert!(asm.contains("mov rax, 5"));
-        assert!(asm.contains("mov dword ptr [rbp - 4], rax"));
+        assert!(asm.contains("mov dword ptr [rbp - 4], eax"));
         assert!(asm.contains("movsxd rax, dword ptr [rbp - 4]"));
         assert!(asm.contains("ret"));
     }
@@ -1196,7 +1258,7 @@ mod tests {
     #[test]
     fn test_store_through_pointer() {
         let asm = compile("int main() { int x = 0; int *p = &x; *p = 7; return x; }");
-        assert!(asm.contains("mov dword ptr [rax], rcx"), "asm:\n{asm}");
+        assert!(asm.contains("mov dword ptr [rax], ecx"), "asm:\n{asm}");
     }
 
     #[test]
@@ -1239,6 +1301,17 @@ mod tests {
         let asm = compile("_Bool b = 5; int main() { return b; }");
         assert!(asm.contains("b:"), "asm:\n{asm}");
         assert!(asm.contains(".byte 1"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_two_byte_struct_argument_loads_two_bytes() {
+        // An 8-byte load read 6 bytes past the struct.
+        let asm = compile(
+            "struct S { char a; char b; }; \
+             int f(struct S s) { return s.b; } \
+             int main() { struct S s; s.a = 1; s.b = 2; return f(s); }",
+        );
+        assert!(asm.contains("movsx rax, word ptr [rax]"), "asm:\n{asm}");
     }
 
     #[test]

@@ -182,6 +182,10 @@ The code generator follows these rules:
   `rbp`. The `variables` map holds the offset for each name.
 - The generator uses numbered labels for control flow, for example `loop_0_start`
   and `if_0_end`.
+- `break` and `continue` jump to the top of the `break_labels` and
+  `continue_labels` stacks. In a `for` loop and a `do`-`while` loop, the `continue`
+  target is `loop_N_next`. That label sits before the update or the condition, so
+  `continue` does not skip them.
 
 The rule about `push` is a correctness rule, not a style rule. A callee measures
 its 32 bytes of shadow space from `rsp`. A `push` moves `rsp` down by 8, so the
@@ -289,7 +293,8 @@ Do these steps in order:
 1. Add a variant to the `Instruction` enum in `instruction.rs`.
 2. Add a match arm in `parse_intel_line` in `instruction.rs`.
 3. Add an arm in `encoded_len` and an arm in `encode` in `encoder.rs`.
-4. Add a test. Run `cargo test --lib assembler`.
+4. Add the form to `cases()` in `tests/encoder_vs_gas.rs`, which checks the bytes
+   against GNU `as`. Run `cargo test --test encoder_vs_gas`.
 
 ### Add a C operator
 

@@ -39,6 +39,9 @@ pub struct Parser {
     /// has type `int` in C, so the parser substitutes the value at each use and
     /// no later stage ever sees the name.
     enum_constants: HashMap<String, i64>,
+    /// How many loops enclose the current statement. `break` and `continue`
+    /// need at least one.
+    loop_depth: usize,
 }
 
 /// What one top-level item turned out to be.
@@ -55,6 +58,7 @@ impl Parser {
             tokens, pos: 0,
             typedefs: HashMap::new(), structs: HashMap::new(),
             enums: HashMap::new(), enum_constants: HashMap::new(),
+            loop_depth: 0,
         }
     }
 
@@ -563,9 +567,18 @@ impl Parser {
         let node = match self.current().clone() {
             Token::Return => {
                 self.advance(); // consume 'return'
-                let expr = self.parse_expr()?;
+                let expr = if self.current() == &Token::Semicolon {
+                    None
+                } else {
+                    Some(self.parse_expr()?)
+                };
                 self.expect(&Token::Semicolon)?;
                 Stmt::Return(expr)
+            }
+            Token::LBrace => Stmt::Block(self.parse_block()?),
+            Token::Semicolon => {
+                self.advance();
+                Stmt::Block(Vec::new())
             }
 
             // Reached from a brace-less body and from a `for` initializer,
@@ -581,8 +594,20 @@ impl Parser {
                 }
                 return Ok(decls.remove(0));
             }
+            Token::Break | Token::Continue => {
+                let tok = self.advance().clone();
+                if self.loop_depth == 0 {
+                    return Err(CompileError::new(
+                        format!("{} outside a loop", tok.describe()),
+                        start,
+                    ));
+                }
+                self.expect(&Token::Semicolon)?;
+                if tok == Token::Break { Stmt::Break } else { Stmt::Continue }
+            }
             Token::For => return self.parse_for(),
             Token::While => return self.parse_while(),
+            Token::Do => return self.parse_do_while(),
             Token::If => return self.parse_if(),
             _ => {
                 let expr = self.parse_expr()?;
@@ -599,7 +624,8 @@ impl Parser {
     //   assignment  = += -= ...   (right-assoc)
     //   ternary     ?:            (right-assoc)
     //   ||, &&, |, ^, &
-    //   comparison  < <= > >= == !=   (one level; C puts == and != below the others)
+    //   equality    == !=
+    //   relational  < <= > >=
     //   shift       << >>
     //   additive    + -
     //   multiplicative  * / %
@@ -688,10 +714,10 @@ impl Parser {
     }
 
     fn parse_bit_and(&mut self) -> Result<TypedExpr, CompileError> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_equality()?;
         while self.current() == &Token::Ampersand {
             self.advance();
-            let right = self.parse_comparison()?;
+            let right = self.parse_equality()?;
             let span = left.span.to(right.span);
             left = TypedExpr::new(Expr::BinaryOp(BinaryOp::BitAnd, Box::new(left), Box::new(right)), span);
         }
@@ -715,7 +741,23 @@ impl Parser {
     }
 
 
-    fn parse_comparison(&mut self) -> Result<TypedExpr, CompileError> {
+    fn parse_equality(&mut self) -> Result<TypedExpr, CompileError> {
+        let mut left = self.parse_relational()?;
+        loop {
+            let op = match self.current() {
+                Token::Equals => BinaryOp::Eq,
+                Token::NotEquals => BinaryOp::Neq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_relational()?;
+            let span = left.span.to(right.span);
+            left = TypedExpr::new(Expr::BinaryOp(op, Box::new(left), Box::new(right)), span);
+        }
+        Ok(left)
+    }
+
+    fn parse_relational(&mut self) -> Result<TypedExpr, CompileError> {
         let mut left = self.parse_shift()?;
         loop {
             let op = match self.current() {
@@ -723,8 +765,6 @@ impl Parser {
                 Token::LessThanEquals => BinaryOp::Lte,
                 Token::GreaterThan => BinaryOp::Gt,
                 Token::GreaterThanEquals => BinaryOp::Gte,
-                Token::Equals => BinaryOp::Eq,
-                Token::NotEquals => BinaryOp::Neq,
                 _ => break,
             };
             self.advance();
@@ -805,20 +845,23 @@ impl Parser {
         self.advance(); // 'for'
         self.expect(&Token::LParen)?;
 
+        // An empty init is the empty statement, which `parse_statement` accepts.
         let init = Box::new(self.parse_statement()?);
-        let cond = self.parse_expr()?;
+        let cond = if self.current() == &Token::Semicolon { None } else { Some(self.parse_expr()?) };
         self.expect(&Token::Semicolon)?;
-        let update_start = self.current_span();
-        let update_expr = self.parse_expr()?;
-        let update = Box::new(Spanned::new(
-            Stmt::Expr(update_expr),
-            update_start.to(self.previous_span()),
-        ));
-
+        let update = if self.current() == &Token::RParen { None } else { Some(self.parse_expr()?) };
         self.expect(&Token::RParen)?;
-        let body = self.parse_block()?;
+        let body = self.parse_loop_body()?;
 
         Ok(Spanned::new(Stmt::For { init, cond, update, body }, start.to(self.previous_span())))
+    }
+
+    /// A loop body, where `break` and `continue` are legal.
+    fn parse_loop_body(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
+        self.loop_depth += 1;
+        let body = self.parse_block();
+        self.loop_depth -= 1;
+        body
     }
 
     fn parse_while(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -827,8 +870,20 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen)?;
-        let body = self.parse_block()?;
+        let body = self.parse_loop_body()?;
         Ok(Spanned::new(Stmt::While { cond, body }, start.to(self.previous_span())))
+    }
+
+    fn parse_do_while(&mut self) -> Result<Spanned<Stmt>, CompileError> {
+        let start = self.current_span();
+        self.advance(); // 'do'
+        let body = self.parse_loop_body()?;
+        self.expect(&Token::While)?;
+        self.expect(&Token::LParen)?;
+        let cond = self.parse_expr()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Spanned::new(Stmt::DoWhile { body, cond }, start.to(self.previous_span())))
     }
 
     fn parse_if(&mut self) -> Result<Spanned<Stmt>, CompileError> {
@@ -1246,7 +1301,7 @@ mod tests {
         // This is why the code generator needs no enum support.
         let p = parse_src("enum { HI = 9 };\nint main() { return HI; }").unwrap();
         match &p.functions[0].body[0].node {
-            Stmt::Return(value) => assert_eq!(value.node, Expr::IntLiteral(9)),
+            Stmt::Return(Some(value)) => assert_eq!(value.node, Expr::IntLiteral(9)),
             other => panic!("expected a return, got {other:?}"),
         }
     }
@@ -1954,6 +2009,88 @@ mod tests {
                 }
             }
             other => panic!("expected Assign, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn break_outside_a_loop_is_an_error() {
+        let src = "int main() { if (1) break; return 0; }";
+        let err = parse_src(src).unwrap_err();
+        assert!(err.message.contains("`break`"), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find("break").unwrap());
+    }
+
+    #[test]
+    fn continue_outside_a_loop_is_an_error() {
+        let src = "int main() { continue; }";
+        let err = parse_src(src).unwrap_err();
+        assert!(err.message.contains("`continue`"), "got: {}", err.message);
+        assert_eq!(err.span.start, src.find("continue").unwrap());
+    }
+
+    #[test]
+    fn a_loop_ends_the_break_context() {
+        // The `break` follows the loop, so no loop encloses it.
+        let err = parse_src("int main() { while (0) { } break; }").unwrap_err();
+        assert!(err.message.contains("`break`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn break_and_continue_parse_inside_loops() {
+        assert!(parse_src("int main() { while (1) { if (1) break; continue; } \
+                           for (;;) break; return 0; }").is_ok());
+    }
+
+    #[test]
+    fn multiplication_binds_tighter_than_addition() {
+        assert!(matches!(
+            expr_of("1 + 2 * 3;"),
+            Expr::BinaryOp(BinaryOp::Add, _, ref r) if matches!(r.node, Expr::BinaryOp(BinaryOp::Mul, _, _))
+        ));
+    }
+
+    #[test]
+    fn logical_and_binds_tighter_than_or_and_looser_than_comparison() {
+        assert!(matches!(
+            expr_of("0 || 1 && 2;"),
+            Expr::BinaryOp(BinaryOp::LogicalOr, _, ref r) if matches!(r.node, Expr::BinaryOp(BinaryOp::LogicalAnd, _, _))
+        ));
+        match expr_of("a < 5 && b > 3;") {
+            Expr::BinaryOp(BinaryOp::LogicalAnd, l, r) => {
+                assert!(matches!(l.node, Expr::BinaryOp(BinaryOp::Lt, _, _)));
+                assert!(matches!(r.node, Expr::BinaryOp(BinaryOp::Gt, _, _)));
+            }
+            other => panic!("expected && at the root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_semicolon_is_an_error() {
+        let err = parse_src("int main() { return 0 }").unwrap_err();
+        assert!(err.message.contains("expected `;`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn control_statements_parse_into_their_nodes() {
+        let program = parse_src(
+            "int main() { if (1) { 1; } else { 2; } while (0) { } for (;;) { } return 0; }",
+        ).unwrap();
+        let body = &program.functions[0].body;
+        assert!(matches!(&body[0].node,
+            Stmt::If { then_branch, else_branch, .. } if then_branch.len() == 1 && else_branch.len() == 1));
+        assert!(matches!(body[1].node, Stmt::While { .. }));
+        assert!(matches!(body[2].node, Stmt::For { cond: None, update: None, .. }));
+    }
+
+    #[test]
+    fn relational_binds_tighter_than_equality() {
+        // `a == b < c` is `a == (b < c)`.
+        match expr_of("a == b < c;") {
+            Expr::BinaryOp(BinaryOp::Eq, l, r) => {
+                assert!(matches!(l.node, Expr::Var(ref n) if n == "a"));
+                assert!(matches!(r.node, Expr::BinaryOp(BinaryOp::Lt, _, _)));
+            }
+            other => panic!("expected Eq at the root, got {other:?}"),
         }
     }
 

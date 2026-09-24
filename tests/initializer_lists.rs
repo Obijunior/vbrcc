@@ -4,71 +4,8 @@
 //! the executable. On a host that cannot run a PE (not Windows, no wine)
 //! the run is skipped and the test passes.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn compile_and_run(src: &str, base: &str) -> Option<i32> {
-    let mut c_path = std::env::temp_dir();
-    c_path.push(format!("{base}.c"));
-    let mut out_base = std::env::temp_dir();
-    out_base.push(base);
-    std::fs::write(&c_path, src).unwrap();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
-        .args([c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
-        .status()
-        .unwrap();
-    if !status.success() {
-        panic!("compile failed for {base}");
-    }
-
-    let mut exe = out_base.clone();
-    exe.set_extension("exe");
-    let exe: PathBuf = if exe.exists() { exe } else { out_base };
-    run_exit_code(&exe)
-}
-
-fn run_exit_code(exe: &Path) -> Option<i32> {
-    if cfg!(target_os = "windows") {
-        Some(Command::new(exe).status().unwrap().code().unwrap())
-    } else if Command::new("wine").arg("--version").output().is_ok() {
-        Some(Command::new("wine").arg(exe).status().unwrap().code().unwrap())
-    } else {
-        eprintln!("skipping run: no PE runner (not Windows, no wine)");
-        None
-    }
-}
-
-fn compile_and_capture(src: &str, base: &str) -> Option<String> {
-    let mut c_path = std::env::temp_dir();
-    c_path.push(format!("{base}.c"));
-    let mut out_base = std::env::temp_dir();
-    out_base.push(base);
-    std::fs::write(&c_path, src).unwrap();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
-        .args([c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
-        .status()
-        .unwrap();
-    if !status.success() {
-        panic!("compile failed for {base}");
-    }
-
-    let mut exe = out_base.clone();
-    exe.set_extension("exe");
-    let exe: PathBuf = if exe.exists() { exe } else { out_base };
-
-    if cfg!(target_os = "windows") {
-        let out = Command::new(&exe).output().unwrap();
-        Some(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else if Command::new("wine").arg("--version").output().is_ok() {
-        let out = Command::new("wine").arg(&exe).output().unwrap();
-        Some(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        eprintln!("skipping run: no PE runner (not Windows, no wine)");
-        None
-    }
-}
+mod common;
+use common::{compile_and_run, compile_and_capture, compile_error};
 
 #[test]
 fn local_flat_initializer_sums() {
@@ -233,15 +170,7 @@ int main() {
 #[test]
 fn global_initializer_elements_must_be_constant() {
     let src = "int n; int g[2] = {n, 1}; int main() { return 0; }";
-    let mut c_path = std::env::temp_dir();
-    c_path.push("init_global_nonconst.c");
-    std::fs::write(&c_path, src).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
-        .args([c_path.to_str().unwrap(), "-o", "init_global_nonconst"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success(), "expected a compile error");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = compile_error(src, "init_global_nonconst");
     assert!(stderr.contains("not a constant"), "got: {stderr}");
 }
 

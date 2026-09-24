@@ -26,6 +26,7 @@
 //! offset. The container writer or an external linker then patches it.
 
 use super::instruction::{Instruction, Section};
+use super::register::Register64;
 use super::relocation::{Relocation, RelocationType};
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +68,13 @@ fn encode_mem_disp(reg_field: u8, base_low3: u8, disp: i32) -> Vec<u8> {
     }
     out.extend_from_slice(&disp_bytes);
     out
+}
+
+/// A byte store needs a REX prefix for an extended register, and also for `spl`,
+/// `bpl`, `sil`, and `dil`. Without REX, register numbers 4 to 7 mean `ah`, `ch`,
+/// `dh`, and `bh`.
+fn byte_store_needs_rex(base: Register64, src: Register64) -> bool {
+    base.ext() || src.ext() || src.low3() >= 4
 }
 
 pub fn encoded_len(instruction: &Instruction) -> usize {
@@ -131,12 +139,16 @@ pub fn encoded_len(instruction: &Instruction) -> usize {
         Instruction::MovzxReg64Reg8 { .. } => 4,
         Instruction::MovMemDispReg { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
         Instruction::MovRegMemDisp { base, disp, .. } => 2 + mem_disp_len(base.low3(), *disp),
-        Instruction::MovMemDispReg8  { base, src, disp } |
+        Instruction::MovMemDispReg8 { base, src, disp } => {
+            let rex_len = if byte_store_needs_rex(*base, *src) { 1 } else { 0 };
+            rex_len + 1 + mem_disp_len(base.low3(), *disp)
+        }
         Instruction::MovMemDispReg32 { base, src, disp } => {
             let rex_len = if base.ext() || src.ext() { 1 } else { 0 };
             rex_len + 1 + mem_disp_len(base.low3(), *disp)
         }
-        Instruction::MovsxReg64Mem8  { base, disp, .. } => 1 + 2 + mem_disp_len(base.low3(), *disp), // REX.W + 0F BE
+        Instruction::MovsxReg64Mem8  { base, disp, .. } |
+        Instruction::MovsxReg64Mem16 { base, disp, .. } => 1 + 2 + mem_disp_len(base.low3(), *disp), // REX.W + 0F BE/BF
         Instruction::MovsxdReg64Mem32 { base, disp, .. } => 1 + 1 + mem_disp_len(base.low3(), *disp), // REX.W + 63
     }
 }
@@ -205,9 +217,9 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
         }
         
         Instruction::MovMemDispReg8 { base, disp, src } => {
-            // 0x88 = MOV r/m8, r8. No REX.W. REX only if an extension bit is set.
+            // 0x88 = MOV r/m8, r8. No REX.W.
             let mut out = Vec::new();
-            if base.ext() || src.ext() { out.push(rex(false, src.ext(), false, base.ext())); }
+            if byte_store_needs_rex(*base, *src) { out.push(rex(false, src.ext(), false, base.ext())); }
             out.push(0x88);
             out.extend_from_slice(&encode_mem_disp(src.low3(), base.low3(), *disp));
             out
@@ -224,6 +236,13 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
             // REX.W + 0F BE /r = MOVSX r64, r/m8
             let r = rex(true, dst.ext(), false, base.ext());
             let mut out = vec![r, 0x0F, 0xBE];
+            out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
+            out
+        }
+        Instruction::MovsxReg64Mem16 { dst, base, disp } => {
+            // REX.W + 0F BF /r = MOVSX r64, r/m16
+            let r = rex(true, dst.ext(), false, base.ext());
+            let mut out = vec![r, 0x0F, 0xBF];
             out.extend_from_slice(&encode_mem_disp(dst.low3(), base.low3(), *disp));
             out
         }
@@ -313,7 +332,8 @@ pub fn encode(instruction: &Instruction) -> Vec<u8> {
         }
 
         Instruction::ImulRegImm32 { dst, imm } => {
-            let r = rex(true, false, false, dst.ext());
+            // `dst` fills both ModR/M fields, so it needs REX.R and REX.B.
+            let r = rex(true, dst.ext(), false, dst.ext());
             let m = modrm(0b11, dst.low3(), dst.low3()); // Opcode 0x69 is IMUL r64, r/m64, imm32
             let mut out = vec![r, 0x69, m];
             out.extend_from_slice(&imm.to_le_bytes());
@@ -875,6 +895,53 @@ mod tests {
         // REX.W=0x48, 0x8D, modrm(mod=01, reg=rax=000, rm=rbp=101)=0x45, disp8=0xF8
         assert_eq!(encode(&instr), vec![0x48, 0x8D, 0x45, 0xF8]);
         assert_eq!(encoded_len(&instr), 4);
+    }
+
+    /// Pass one lays out every label from the predicted lengths. If a label form
+    /// encodes to a different length, every later address is wrong.
+    #[test]
+    fn label_forms_encode_to_their_predicted_length() {
+        use Register64::*;
+        let mut labels = HashMap::new();
+        labels.insert("f".to_string(), (Section::Text, 0x40));
+        labels.insert("g".to_string(), (Section::Data, 0x10));
+        let label_set: HashSet<String> = labels.keys().cloned().collect();
+        let mut externs = HashMap::new();
+        externs.insert("printf".to_string(), 0x3000u32);
+
+        let forms = [
+            Instruction::JmpLabel { label: "f".into() },
+            Instruction::JeLabel { label: "f".into() },
+            Instruction::JneLabel { label: "f".into() },
+            Instruction::JlLabel { label: "f".into() },
+            Instruction::JleLabel { label: "f".into() },
+            Instruction::JgLabel { label: "f".into() },
+            Instruction::JgeLabel { label: "f".into() },
+            Instruction::CallLabel { label: "f".into() },
+            Instruction::CallLabel { label: "printf".into() },
+            Instruction::LeaRegLabel { dst: Rax, label: "g".into() },
+            Instruction::LeaRegLabel { dst: R15, label: "f".into() },
+        ];
+        for i in &forms {
+            let pe = encode_with_labels(i, &labels, &externs, 0x1000, 0x1000, 0x2000).unwrap();
+            assert_eq!(pe.len(), encoded_len_with_labels(i, &label_set), "PE: {i:?}");
+
+            // The COFF path resolves an unknown call through a relocation instead.
+            let (obj, _) = encode_for_obj(i, &labels, Section::Text, 0).unwrap();
+            assert_eq!(obj.len(), encoded_len(i), "COFF: {i:?}");
+        }
+    }
+
+    #[test]
+    fn movsx_word_parses_and_encodes() {
+        use crate::assembler::instruction::{parse_intel_line, AsmLine};
+        let instr = match parse_intel_line("  movsx rax, word ptr [rbp - 8]").unwrap() {
+            AsmLine::Instruction(i) => i,
+            other => panic!("expected an instruction, got {other:?}"),
+        };
+        // REX.W 0F BF /r, modrm(01, rax, rbp)=0x45, disp8=-8
+        assert_eq!(encode(&instr), vec![0x48, 0x0F, 0xBF, 0x45, 0xF8]);
+        assert_eq!(encoded_len(&instr), 5);
     }
 
     #[test]

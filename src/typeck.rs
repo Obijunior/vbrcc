@@ -259,7 +259,9 @@ fn check_stmt(
     sigs: &Sigs,
 ) -> Result<(), CompileError> {
     match stmt {
-        Stmt::Return(e) | Stmt::Expr(e) => check_expr(e, scope, sigs)?,
+        Stmt::Return(Some(e)) | Stmt::Expr(e) => check_expr(e, scope, sigs)?,
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Block(body) => check_block(body, scope, sigs)?,
         Stmt::VarDecl { ty, name, init } => {
             if let Some(e) = init {
                 // An unsized local array has no length to infer from, so the
@@ -273,14 +275,18 @@ fn check_stmt(
             check_block(then_branch, scope, sigs)?;
             check_block(else_branch, scope, sigs)?;
         }
-        Stmt::While { cond, body } => {
+        Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
             check_expr(cond, scope, sigs)?;
             check_block(body, scope, sigs)?;
         }
         Stmt::For { init, cond, update, body } => {
             check_stmt(&mut init.node, scope, sigs)?;
-            check_expr(cond, scope, sigs)?;
-            check_stmt(&mut update.node, scope, sigs)?;
+            if let Some(cond) = cond {
+                check_expr(cond, scope, sigs)?;
+            }
+            if let Some(update) = update {
+                check_expr(update, scope, sigs)?;
+            }
             check_block(body, scope, sigs)?;
         }
     }
@@ -609,7 +615,7 @@ mod tests {
         let program = typecheck("int main() { int x = 5; return x; }").unwrap();
         let body = &program.functions[0].body;
         match &body[1].node {
-            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
             other => panic!("expected return, got {:?}", other),
         }
     }
@@ -656,7 +662,7 @@ mod tests {
     fn a_constant_folded_global_initializer_is_accepted() {
         let program = typecheck("int g = 2 + 3 * 4; int main() { return g; }").unwrap();
         match &program.functions[0].body[0].node {
-            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
             other => panic!("expected return, got {other:?}"),
         }
     }
@@ -744,7 +750,7 @@ mod tests {
     fn bitwise_on_ints_is_int() {
         let program = typecheck("int main() { int a = 6; int b = 3; return a & b; }").unwrap();
         match &program.functions[0].body[2].node {
-            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
             other => panic!("got {other:?}"),
         }
     }
@@ -759,7 +765,7 @@ mod tests {
     fn ternary_of_two_ints_is_int() {
         let program = typecheck("int main() { int a = 1; return a ? 2 : 3; }").unwrap();
         match &program.functions[0].body[1].node {
-            Stmt::Return(e) => assert_eq!(e.ty, Type::Int),
+            Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
             other => panic!("got {other:?}"),
         }
     }

@@ -40,6 +40,7 @@ pub enum Instruction {
     MovMemDispReg8  { base: Register64, disp: i32, src: Register64 },
     MovMemDispReg32 { base: Register64, disp: i32, src: Register64 },
     MovsxReg64Mem8  { dst: Register64, base: Register64, disp: i32 },
+    MovsxReg64Mem16 { dst: Register64, base: Register64, disp: i32 },
     MovsxdReg64Mem32 { dst: Register64, base: Register64, disp: i32 },
 
     AddRegReg { dst: Register64, src: Register64 },
@@ -122,6 +123,30 @@ fn parse_register8(s: &str) -> Option<Register8> {
     }
 }
 
+/// The 64-bit register whose low `width` bytes `name` names: `eax` and `al` give
+/// `rax`, `r9d` and `r9b` give `r9`. A narrow store must use these names, the same
+/// as GNU `as`, so `--gcc` accepts everything this assembler accepts.
+fn parse_narrow_register(name: &str, width: u8) -> Option<Register64> {
+    let n = name.trim().to_ascii_lowercase();
+    let legacy: [(&str, &str, &str); 8] = [
+        ("rax", "eax", "al"), ("rcx", "ecx", "cl"), ("rdx", "edx", "dl"), ("rbx", "ebx", "bl"),
+        ("rsp", "esp", "spl"), ("rbp", "ebp", "bpl"), ("rsi", "esi", "sil"), ("rdi", "edi", "dil"),
+    ];
+    for (full, dword, byte) in legacy {
+        if (width == 4 && n == dword) || (width == 1 && n == byte) {
+            return parse_register64(full);
+        }
+    }
+    // r8d..r15d and r8b..r15b
+    let suffix = if width == 4 { 'd' } else if width == 1 { 'b' } else { return None };
+    let stem = n.strip_suffix(suffix)?;
+    if stem.len() >= 2 && stem.as_bytes()[1].is_ascii_digit() {
+        parse_register64(stem)
+    } else {
+        None
+    }
+}
+
 fn split_instruction(line: &str) -> (&str, Vec<&str>) {
     let mut parts = line.trim().splitn(2, char::is_whitespace);
     let opcode = parts.next().unwrap_or("").trim();
@@ -156,7 +181,7 @@ fn parse_mem_operand(op: &str) -> Option<(Register64, i32)> {
 
 fn parse_size_prefix(op: &str) -> (Option<u8>, &str) {
     let s = op.trim();
-    for (kw, w) in [("byte ptr", 1u8), ("dword ptr", 4), ("qword ptr", 8)] {
+    for (kw, w) in [("byte ptr", 1u8), ("word ptr", 2), ("dword ptr", 4), ("qword ptr", 8)] {
         if let Some(rest) = s.strip_prefix(kw) {
             return (Some(w), rest.trim());
         }
@@ -358,8 +383,11 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
 
             let (width, mem_str) = parse_size_prefix(operands[0]);
             if let Some((base, disp)) = parse_mem_operand(mem_str) {
-                let src = parse_register64(operands[1])
-                    .ok_or_else(|| format!("[ ERROR ] :: invalid src register: {}", raw))?;
+                let src = match width {
+                    Some(w @ (1 | 4)) => parse_narrow_register(operands[1], w),
+                    _ => parse_register64(operands[1]),
+                }
+                .ok_or_else(|| format!("[ ERROR ] :: invalid src register for this width: {}", raw))?;
                 let instr = match width {
                     Some(1) => Instruction::MovMemDispReg8  { base, disp, src },
                     Some(4) => Instruction::MovMemDispReg32 { base, disp, src },
@@ -522,12 +550,13 @@ pub fn parse_intel_line(raw: &str) -> Result<AsmLine, String> {
             }
             let dst = parse_register64(operands[0])
                 .ok_or_else(|| format!("[ ERROR ] :: invalid dst register: {}", raw))?;
-            let (_w, mem_str) = parse_size_prefix(operands[1]);
+            let (w, mem_str) = parse_size_prefix(operands[1]);
             let (base, disp) = parse_mem_operand(mem_str)
                 .ok_or_else(|| format!("[ ERROR ] :: {} expects a memory operand: {}", opcode, raw))?;
-            let instr = match opcode {
-                "movsx"  => Instruction::MovsxReg64Mem8   { dst, base, disp },
-                _        => Instruction::MovsxdReg64Mem32 { dst, base, disp },
+            let instr = match (opcode, w) {
+                ("movsx", Some(2)) => Instruction::MovsxReg64Mem16  { dst, base, disp },
+                ("movsx", _)       => Instruction::MovsxReg64Mem8   { dst, base, disp },
+                _                  => Instruction::MovsxdReg64Mem32 { dst, base, disp },
             };
             return Ok(AsmLine::Instruction(instr));
         }
@@ -676,6 +705,22 @@ mod tests {
             AsmLine::DataBytes(b) => assert_eq!(b, vec![0, 0, 0, 0]),
             other => panic!("expected DataBytes, got {other:?}"),
         }
+    }
+
+    /// A narrow store names the narrow register, as GNU `as` requires. The old
+    /// `mov dword ptr [..], rax` passed here and failed in `--gcc` mode.
+    #[test]
+    fn a_narrow_store_needs_the_narrow_register_name() {
+        assert!(matches!(
+            parse_intel_line("mov dword ptr [rbp - 4], eax").unwrap(),
+            AsmLine::Instruction(Instruction::MovMemDispReg32 { .. })
+        ));
+        assert!(matches!(
+            parse_intel_line("mov byte ptr [rax], r9b").unwrap(),
+            AsmLine::Instruction(Instruction::MovMemDispReg8 { .. })
+        ));
+        assert!(parse_intel_line("mov dword ptr [rbp - 4], rax").is_err());
+        assert!(parse_intel_line("mov byte ptr [rax], rcx").is_err());
     }
 
     #[test]

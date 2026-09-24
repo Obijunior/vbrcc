@@ -5,12 +5,14 @@
 //! they pass even if `main.rs` never wires the preprocessor into the pipeline.
 //! These tests close that gap by going through the real `vbrcc` entry point.
 
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use vbrcc::diagnostic::SourceMap;
 use vbrcc::lexer::Token;
 use vbrcc::preprocessor::Preprocessor;
+
+mod common;
+use common::{run, compile_and_run};
 
 /// Preprocess `src` and render it back to text, the way `-E` does.
 fn e(src: &str) -> String {
@@ -47,38 +49,6 @@ fn string_literals_round_trip_with_quotes() {
 #[test]
 fn continuation_lines_are_joined() {
     assert_eq!(e("#define P 1 + \\\n 2\nint x = P;"), "int x = 1 + 2 ;");
-}
-
-fn compile_and_run(src: &str, base: &str) -> Option<i32> {
-    let mut c_path = std::env::temp_dir();
-    c_path.push(format!("{base}.c"));
-    let mut out_base = std::env::temp_dir();
-    out_base.push(base);
-    std::fs::write(&c_path, src).unwrap();
-
-    let status = Command::new(env!("CARGO_BIN_EXE_vbrcc"))
-        .args([c_path.to_str().unwrap(), "-o", out_base.to_str().unwrap()])
-        .status()
-        .unwrap();
-    if !status.success() {
-        panic!("compile failed for {base}");
-    }
-
-    let mut exe = out_base.clone();
-    exe.set_extension("exe");
-    let exe: PathBuf = if exe.exists() { exe } else { out_base };
-    run_exit_code(&exe)
-}
-
-fn run_exit_code(exe: &Path) -> Option<i32> {
-    if cfg!(target_os = "windows") {
-        Some(Command::new(exe).status().unwrap().code().unwrap())
-    } else if Command::new("wine").arg("--version").output().is_ok() {
-        Some(Command::new("wine").arg(exe).status().unwrap().code().unwrap())
-    } else {
-        eprintln!("skipping run: no PE runner (not Windows, no wine)");
-        None
-    }
 }
 
 /// Regression: `main.rs` once kept its old direct lexer call alongside the new
@@ -191,6 +161,20 @@ fn bundled_header_reaches_e_output() {
     assert_eq!(e("#include <limits.h>\nint x = SHRT_MAX;"), "int x = 32767 ;");
 }
 
+/// Each bundled header must parse when a program includes it alone. `string.h` and
+/// `stdlib.h` used `size_t` without including `stddef.h`.
+#[test]
+fn each_bundled_header_parses_on_its_own() {
+    for h in ["limits.h", "stddef.h", "stdbool.h", "stdint.h", "stdio.h", "string.h", "stdlib.h"] {
+        let src = format!("#include <{h}>\nint main() {{ return 0; }}\n");
+        let mut map = SourceMap::single("test.c", &src);
+        let toks = Preprocessor::new(&mut map).run(0).unwrap();
+        if let Err(err) = vbrcc::parser::Parser::new(toks).parse_program() {
+            panic!("<{h}> alone does not parse: {}", err.message);
+        }
+    }
+}
+
 /// `#include` must resolve through the compiled binary, not only through the
 /// library. This is the wiring test for `-I` and for the bundled set.
 #[test]
@@ -223,11 +207,9 @@ fn binary_accepts_a_search_directory() {
         .unwrap();
     assert!(status.success(), "compile failed");
 
-    let mut exe = out_base.clone();
-    exe.set_extension("exe");
-    let exe: PathBuf = if exe.exists() { exe } else { out_base };
-    if let Some(code) = run_exit_code(&exe) {
-        assert_eq!(code, 42);
+    let exe = out_base.with_extension("exe");
+    if let Some(r) = run(&exe, "pp_dash_i") {
+        assert_eq!(r.code, 42);
     }
 }
 
