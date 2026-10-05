@@ -150,6 +150,7 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 | Array index | `a[i]` |
 | Struct member access | `s.x`, `p->x` |
 | Cast | `(int *)p` |
+| Size | `sizeof(struct Node)`, `sizeof a`, `sizeof(int[4])` |
 
 > **A cast changes the type, not the value.** The code generator does not truncate or
 > extend the operand yet, so `(char)300` is still 300 and `(_Bool)5` is still 5.
@@ -188,8 +189,15 @@ example a dereference of a value that is not a pointer.
 > struct copies on assignment and on initialization. A struct passes to a function and
 > returns from one by value. A struct passes in a register only when its size is exactly
 > 1, 2, 4, or 8 bytes. Every other size passes and returns through memory, per the Win64
-> convention. A self-referential struct, a bitfield, and a braced struct initializer do
-> not work yet.
+> convention. A struct may point to itself, as in `struct Node { int v; struct Node *next; };`.
+> A bitfield and a braced struct initializer do not work yet.
+
+> **`sizeof` has type `int` for now**, not `size_t`, because `unsigned` does not exist
+> yet. `sizeof expr` does not evaluate `expr`, so `sizeof(i++)` leaves `i` alone.
+
+> **`static` works.** On a function or a global it changes nothing, because VBRCC
+> compiles one file. A `static` local lives in `.data`, keeps its value between calls,
+> and needs a constant initializer.
 
 > **Type sizes follow the Windows LLP64 model.** `char` is 1 byte, `int` and `long`
 > are 4, and `long long`, a pointer, and `void *` are 8. This matches MSVC and
@@ -232,19 +240,18 @@ example a dereference of a value that is not a pointer.
 * `union`
 * `unsigned`, `float`, and `double`
 * A `case` label nested inside a block or a loop in the `switch` body (Duff's device)
-* `sizeof`
 * Hex and octal literals. A leading `0` does not make a literal octal, so `010` is 10
 * A string literal that holds `'`, `\r`, or a non-ASCII character. The assembler rejects it
 * Escape sequences other than `\n`, `\t`, `\r`, `\0`, `\"`, `\'`, and `\\`
 * A string initializer for a pointer, such as a global `char *s = "hi";`
 * The comma operator, and pre-increment and pre-decrement (`++i`, `--i`)
-* The storage-class and function specifiers `static`, `extern`, `inline`, and `register`
+* The storage-class and function specifiers `extern`, `inline`, and `register`
 * Designated initializers (`{ .x = 1, [3] = 7 }`), compound literals, and a string
   inside a brace initializer
 * More than four function parameters or call arguments
 * Integer promotion and the usual arithmetic conversions
 * Block-level scope. Every variable shares one flat scope for each function
-* A self-referential `struct`, a bitfield, and a braced `struct` initializer
+* A bitfield and a braced `struct` initializer
 * `#` stringizing, `##` pasting, `__VA_ARGS__`, and `#line`
 * Imports from a DLL other than `msvcrt.dll` in the default backend, or other than
   `msvcrt.dll` and `kernel32` with `--lld-link`
@@ -379,6 +386,7 @@ cargo test
 - The ternary conditional operator `?:`
 - `struct`: member access, whole-struct copy, pass and return by value, and globals
 - Several names in one declaration, such as `int a, b = 5;`
+- Self-referential structs, `sizeof`, and `static`
 - `do`-`while`, `switch`, `break`, `continue`, empty `for` clauses, blocks, and `return;`
 
 **Next**
@@ -387,7 +395,6 @@ cargo test
 - Designated initializers and compound literals
 - `union`
 - More than four function parameters or call arguments
-- `sizeof`
 - `unsigned` integer types
 - Preprocessor: `#` stringizing, `##` pasting, `__VA_ARGS__`
 - Block-level scope

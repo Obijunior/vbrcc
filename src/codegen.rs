@@ -32,8 +32,8 @@ use std::collections::HashMap;
 enum VarLoc {
     /// A frame slot at this `rbp` offset (negative).
     Local(i64),
-    /// A `.data` label, reached as `[rip + name]`.
-    Global,
+    /// A `.data` label, reached as `[rip + label]`: a global, or a `static` local.
+    Data(String),
 }
 
 pub struct Codegen {
@@ -48,6 +48,10 @@ pub struct Codegen {
     /// return type is a struct passed in memory. `None` otherwise. Set per
     /// function in `gen_function`.
     hidden_ret: Option<i64>,
+    /// The `.data` label of each `static` local in the current function.
+    static_labels: HashMap<String, String>,
+    /// The function being generated, for `static` local labels.
+    current_fn: String,
     /// Jump targets for `break` and `continue`, innermost last.
     break_labels: Vec<String>,
     continue_labels: Vec<String>,
@@ -64,6 +68,8 @@ impl Codegen {
             stack_offset: 0,
             label_count: 0,
             hidden_ret: None,
+            static_labels: HashMap::new(),
+            current_fn: String::new(),
             break_labels: Vec::new(),
             continue_labels: Vec::new(),
         }
@@ -163,8 +169,10 @@ impl Codegen {
     fn var_loc(&self, name: &str) -> Option<VarLoc> {
         if let Some(&off) = self.variables.get(name) {
             Some(VarLoc::Local(off))
+        } else if let Some(label) = self.static_labels.get(name) {
+            Some(VarLoc::Data(label.clone()))
         } else if self.globals.contains_key(name) {
-            Some(VarLoc::Global)
+            Some(VarLoc::Data(name.to_string()))
         } else {
             None
         }
@@ -320,6 +328,8 @@ impl Codegen {
 
     fn gen_function(&mut self, func: &Function) -> Result<(), CompileError> {
         self.variables.clear();
+        self.static_labels.clear();
+        self.current_fn = func.name.clone();
         self.stack_offset = 0;
         self.hidden_ret = None;
 
@@ -459,10 +469,26 @@ impl Codegen {
                 let target = self.continue_labels.last().expect("parser checked the loop").clone();
                 self.emit(&format!("  jmp {target}"));
             }
+            Stmt::StaticLocal { ty, name, init } => {
+                // `.data` storage, so the value outlives the call. The label is
+                // unique per function and declaration, because two functions may
+                // each have a `static int count`.
+                let label = format!("__static_{}_{}_{}", self.current_fn, name, self.label_count);
+                self.label_count += 1;
+                self.gen_global(&GlobalVar {
+                    ty: ty.clone(),
+                    name: label.clone(),
+                    init: init.clone(),
+                    span: stmt.span,
+                })?;
+                self.variables.remove(name);
+                self.static_labels.insert(name.clone(), label);
+            }
             Stmt::VarDecl { ty, name, init, .. } => {
                 self.stack_offset -= ty.size() as i64;
                 self.stack_offset = -Codegen::align_up(-self.stack_offset, ty.align() as i64);
                 let offset: i64 = self.stack_offset;
+                self.static_labels.remove(name);
                 self.variables.insert(name.clone(), offset);
                 if let Some(expr) = init {
                     if matches!(expr.node, Expr::InitList(_)) {
@@ -675,7 +701,7 @@ impl Codegen {
                         .with_label("not found in this scope")
                 })? {
                     VarLoc::Local(off) => self.emit(&format!("  lea rax, [rbp - {}]", -off)),
-                    VarLoc::Global => self.emit(&format!("  lea rax, [rip + {name}]")),
+                    VarLoc::Data(label) => self.emit(&format!("  lea rax, [rip + {label}]")),
                 }
             }
             Expr::Deref(inner) => {
@@ -984,10 +1010,10 @@ impl Codegen {
                             self.emit_load(&addr, expr.ty.size());
                         }
                     }
-                    VarLoc::Global => {
+                    VarLoc::Data(label) => {
                         // The address first; the assembler has no
                         // `mov reg, [rip + label]`.
-                        self.emit(&format!("  lea rax, [rip + {name}]"));
+                        self.emit(&format!("  lea rax, [rip + {label}]"));
                         if !aggregate {
                             self.emit_load("[rax]", expr.ty.size());
                         }
@@ -1072,6 +1098,7 @@ impl Codegen {
                 self.emit_store("[rax]", "rcx", width);
                 self.reload("rax", old_slot);
             }
+            Expr::SizeOf(_) => unreachable!("the type checker folds `sizeof`"),
             Expr::Ternary(cond, then_e, else_e) => {
                 let id = self.label_count;
                 self.label_count += 1;

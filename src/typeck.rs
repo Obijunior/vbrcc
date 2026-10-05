@@ -44,32 +44,45 @@ struct Sig {
     variadic: bool,
 }
 
-type Sigs = HashMap<String, Sig>;
+/// What the checker knows about the whole translation unit.
+struct Env {
+    /// Every function: the prototypes and the definitions. A name in neither is
+    /// left alone. C89 lets a call stand without a declaration, and every program
+    /// written before `#include` worked did so.
+    funcs: HashMap<String, Sig>,
+    /// Every tagged struct, to resolve a `Type::StructRef`.
+    structs: HashMap<String, Type>,
+}
 
-/// Every function this translation unit knows: the prototypes it declared and
-/// the functions it defined.
-///
-/// A name that appears in neither is left alone. C89 lets a call stand without
-/// a declaration, and every program written before `#include` worked did so.
-fn signatures(program: &Program) -> Sigs {
-    let mut sigs = Sigs::new();
+impl Env {
+    /// The full struct for a `StructRef`. Any other type comes back unchanged.
+    fn complete(&self, ty: Type) -> Type {
+        match ty {
+            Type::StructRef { ref tag, .. } => self.structs.get(tag).cloned().unwrap_or(ty),
+            other => other,
+        }
+    }
+}
+
+fn signatures(program: &Program) -> Env {
+    let mut funcs = HashMap::new();
     for d in &program.decls {
-        sigs.insert(
+        funcs.insert(
             d.name.clone(),
             Sig { return_type: d.return_type.clone(), arity: d.params.len(), variadic: d.variadic },
         );
     }
     for f in &program.functions {
-        sigs.insert(
+        funcs.insert(
             f.name.clone(),
             Sig { return_type: f.return_type.clone(), arity: f.params.len(), variadic: false },
         );
     }
-    sigs
+    Env { funcs, structs: program.structs.clone() }
 }
 
 pub fn check(program: &mut Program) -> Result<(), CompileError> {
-    let sigs = signatures(program);
+    let env = signatures(program);
 
     // File scope, pass 1: every global's declared type.
     let mut file_scope: HashMap<String, Type> = HashMap::new();
@@ -80,7 +93,7 @@ pub fn check(program: &mut Program) -> Result<(), CompileError> {
     // Pass 2: validate each initializer. This may refine an unsized
     // `char[]` length on `g.ty`.
     for g in &mut program.globals {
-        check_global(g, &file_scope, &sigs)?;
+        check_global(g, &file_scope, &env)?;
     }
 
     // Pass 3: rebuild the file scope with refined types, then check bodies.
@@ -93,7 +106,7 @@ pub fn check(program: &mut Program) -> Result<(), CompileError> {
         for (ty, name) in &func.params {
             scope.insert(name.clone(), ty.clone());
         }
-        check_block(&mut func.body, &mut scope, &sigs)?;
+        check_block(&mut func.body, &mut scope, &env)?;
     }
     Ok(())
 }
@@ -103,7 +116,7 @@ pub fn check(program: &mut Program) -> Result<(), CompileError> {
 fn check_global(
     g: &mut GlobalVar,
     file_scope: &HashMap<String, Type>,
-    sigs: &Sigs,
+    env: &Env,
 ) -> Result<(), CompileError> {
     let init = match &mut g.init {
         Some(e) => e,
@@ -115,11 +128,11 @@ fn check_global(
     // A brace list has its own shape rules. Each leaf must fold to a constant,
     // which `crate::codegen::gen_global_init` checks when it emits the data.
     if matches!(init.node, Expr::InitList(_)) {
-        g.ty = check_initializer(init, &g.ty, &mut scratch, sigs)?;
+        g.ty = check_initializer(init, &g.ty, &mut scratch, env)?;
         return Ok(());
     }
 
-    check_expr(init, &mut scratch, sigs)?;
+    check_expr(init, &mut scratch, env)?;
 
     match crate::constfold::eval_const(init)? {
         crate::constfold::ConstValue::Bytes(bytes) => match &g.ty {
@@ -181,7 +194,7 @@ fn check_initializer(
     init: &mut TypedExpr,
     target: &Type,
     scope: &mut HashMap<String, Type>,
-    sigs: &Sigs,
+    env: &Env,
 ) -> Result<Type, CompileError> {
     let elems = match &mut init.node {
         Expr::InitList(elems) => elems,
@@ -199,7 +212,7 @@ fn check_initializer(
                 )
                 .with_label(hint));
             }
-            check_expr(init, scope, sigs)?;
+            check_expr(init, scope, env)?;
             return Ok(target.clone());
         }
     };
@@ -230,7 +243,7 @@ fn check_initializer(
     }
 
     for elem in elems.iter_mut() {
-        check_initializer(elem, &elem_ty, scope, sigs)?;
+        check_initializer(elem, &elem_ty, scope, env)?;
     }
 
     let concrete = if declared == 0 {
@@ -245,10 +258,10 @@ fn check_initializer(
 fn check_block(
     stmts: &mut [Spanned<Stmt>],
     scope: &mut HashMap<String, Type>,
-    sigs: &Sigs,
+    env: &Env,
 ) -> Result<(), CompileError> {
     for stmt in stmts {
-        check_stmt(&mut stmt.node, scope, sigs)?;
+        check_stmt(&mut stmt.node, scope, env)?;
     }
     Ok(())
 }
@@ -256,13 +269,24 @@ fn check_block(
 fn check_stmt(
     stmt: &mut Stmt,
     scope: &mut HashMap<String, Type>,
-    sigs: &Sigs,
+    env: &Env,
 ) -> Result<(), CompileError> {
     match stmt {
-        Stmt::Return(Some(e)) | Stmt::Expr(e) => check_expr(e, scope, sigs)?,
+        Stmt::Return(Some(e)) | Stmt::Expr(e) => check_expr(e, scope, env)?,
+        Stmt::StaticLocal { ty, name, init } => {
+            if let Some(e) = init {
+                *ty = check_initializer(e, ty, scope, env)?;
+                // The value goes into `.data` before the program runs, like a
+                // global. A brace list's leaves are checked when codegen emits it.
+                if !matches!(e.node, Expr::InitList(_)) {
+                    crate::constfold::eval_const(e)?;
+                }
+            }
+            scope.insert(name.clone(), ty.clone());
+        }
         Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Case(_) | Stmt::Default => {}
         Stmt::Switch { cond, body } => {
-            check_expr(cond, scope, sigs)?;
+            check_expr(cond, scope, env)?;
             let is_int = matches!(
                 cond.ty,
                 Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. }
@@ -273,35 +297,35 @@ fn check_stmt(
                     cond.span,
                 ));
             }
-            check_block(body, scope, sigs)?;
+            check_block(body, scope, env)?;
         }
-        Stmt::Block(body) => check_block(body, scope, sigs)?,
+        Stmt::Block(body) => check_block(body, scope, env)?,
         Stmt::VarDecl { ty, name, init } => {
             if let Some(e) = init {
                 // An unsized local array has no length to infer from, so the
                 // returned type only differs for a list against `[0]`.
-                *ty = check_initializer(e, ty, scope, sigs)?;
+                *ty = check_initializer(e, ty, scope, env)?;
             }
             scope.insert(name.clone(), ty.clone());
         }
         Stmt::If { cond, then_branch, else_branch } => {
-            check_expr(cond, scope, sigs)?;
-            check_block(then_branch, scope, sigs)?;
-            check_block(else_branch, scope, sigs)?;
+            check_expr(cond, scope, env)?;
+            check_block(then_branch, scope, env)?;
+            check_block(else_branch, scope, env)?;
         }
         Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
-            check_expr(cond, scope, sigs)?;
-            check_block(body, scope, sigs)?;
+            check_expr(cond, scope, env)?;
+            check_block(body, scope, env)?;
         }
         Stmt::For { init, cond, update, body } => {
-            check_stmt(&mut init.node, scope, sigs)?;
+            check_stmt(&mut init.node, scope, env)?;
             if let Some(cond) = cond {
-                check_expr(cond, scope, sigs)?;
+                check_expr(cond, scope, env)?;
             }
             if let Some(update) = update {
-                check_expr(update, scope, sigs)?;
+                check_expr(update, scope, env)?;
             }
-            check_block(body, scope, sigs)?;
+            check_block(body, scope, env)?;
         }
     }
     Ok(())
@@ -314,10 +338,27 @@ fn is_lvalue(e: &Expr) -> bool {
 fn check_expr(
     expr: &mut TypedExpr,
     scope: &mut HashMap<String, Type>,
-    sigs: &Sigs,
+    env: &Env,
 ) -> Result<(), CompileError> {
     let span = expr.span;
+
+    // `sizeof expr` becomes its size. The operand gets a type but no code, so
+    // `sizeof(i++)` leaves `i` alone, as C requires. The result has type `int`
+    // until `unsigned` gives `size_t` a real type.
+    if let Expr::SizeOf(inner) = &mut expr.node {
+        check_expr(inner, scope, env)?;
+        let size = match &inner.node {
+            // A string literal is a `char` array here, not the pointer it decays to.
+            Expr::StringLiteral(s) => s.len() + 1,
+            _ => inner.ty.size(),
+        };
+        expr.node = Expr::IntLiteral(size as i64);
+        expr.ty = Type::Int;
+        return Ok(());
+    }
+
     let ty: Type = match &mut expr.node {
+        Expr::SizeOf(_) => unreachable!("handled above"),
         Expr::IntLiteral(_) => Type::Int,
         Expr::InitList(_) => {
             return Err(CompileError::new(
@@ -331,12 +372,12 @@ fn check_expr(
                 .with_label("not found in this scope")
         })?,
         Expr::UnaryOp(_, inner) => {
-            check_expr(inner, scope, sigs)?;
+            check_expr(inner, scope, env)?;
             Type::Int
         }
         Expr::BinaryOp(op, l, r) => {
-            check_expr(l, scope, sigs)?;
-            check_expr(r, scope, sigs)?;
+            check_expr(l, scope, env)?;
+            check_expr(r, scope, env)?;
             if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
                           | BinaryOp::Shl | BinaryOp::Shr)
             {
@@ -359,7 +400,7 @@ fn check_expr(
             }
         }
         Expr::AddressOf(inner) => {
-            check_expr(inner, scope, sigs)?;
+            check_expr(inner, scope, env)?;
             if !is_lvalue(&inner.node) {
                 return Err(CompileError::new("cannot take the address of this expression", span)
                     .with_label("not an lvalue"));
@@ -367,9 +408,9 @@ fn check_expr(
             Type::Pointer(Box::new(inner.ty.clone()))
         }
         Expr::Deref(inner) => {
-            check_expr(inner, scope, sigs)?;
+            check_expr(inner, scope, env)?;
             match inner.ty.pointee() {
-                Some(t) => t,
+                Some(t) => env.complete(t),
                 None => {
                     return Err(CompileError::new(
                         format!("cannot dereference value of type `{}`", inner.ty.describe()),
@@ -380,10 +421,10 @@ fn check_expr(
             }
         }
         Expr::Index(base, idx) => {
-            check_expr(base, scope, sigs)?;
-            check_expr(idx, scope, sigs)?;
+            check_expr(base, scope, env)?;
+            check_expr(idx, scope, env)?;
             match base.ty.pointee() {
-                Some(t) => t,
+                Some(t) => env.complete(t),
                 None => {
                     return Err(CompileError::new(
                         format!("cannot index value of type `{}`", base.ty.describe()),
@@ -394,11 +435,11 @@ fn check_expr(
             }
         }
         Expr::Cast(t, inner) => {
-            check_expr(inner, scope, sigs)?;
+            check_expr(inner, scope, env)?;
             t.clone()
         }
         Expr::PostIncDec(op, inner) => {
-            check_expr(inner, scope, sigs)?;
+            check_expr(inner, scope, env)?;
             if !is_lvalue(&inner.node) {
                 return Err(CompileError::new(
                     format!("cannot apply `{}` to this expression", op.describe()),
@@ -410,8 +451,8 @@ fn check_expr(
             inner.ty.clone()
         }
         Expr::Assign(lval, rhs) => {
-            check_expr(lval, scope, sigs)?;
-            check_expr(rhs, scope, sigs)?;
+            check_expr(lval, scope, env)?;
+            check_expr(rhs, scope, env)?;
             if !is_lvalue(&lval.node) {
                 return Err(CompileError::new("cannot assign to this expression", span)
                     .with_label("not an lvalue"));
@@ -420,9 +461,9 @@ fn check_expr(
         }
         Expr::FunctionCall { name, args } => {
             for a in args.iter_mut() {
-                check_expr(a, scope, sigs)?;
+                check_expr(a, scope, env)?;
             }
-            match sigs.get(name) {
+            match env.funcs.get(name) {
                 None => Type::Int,
                 Some(sig) => {
                     let ok = if sig.variadic {
@@ -447,7 +488,7 @@ fn check_expr(
             }
         }
         Expr::Member(base, field) => {
-            check_expr(base, scope, sigs)?;
+            check_expr(base, scope, env)?;
             let fields = match &base.ty {
                 Type::Struct { fields, .. } => fields,
                 other => {
@@ -469,9 +510,9 @@ fn check_expr(
             }
         }
         Expr::Ternary(cond, then_e, else_e) => {
-            check_expr(cond, scope, sigs)?;
-            check_expr(then_e, scope, sigs)?;
-            check_expr(else_e, scope, sigs)?;
+            check_expr(cond, scope, env)?;
+            check_expr(then_e, scope, env)?;
+            check_expr(else_e, scope, env)?;
             let is_int = |t: &Type| matches!(t, Type::Int | Type::Char | Type::Bool | Type::Long | Type::LongLong | Type::Enum { .. });
             if then_e.ty == else_e.ty {
                 then_e.ty.clone()
@@ -780,6 +821,21 @@ mod tests {
         let program = typecheck("int main() { int a = 1; return a ? 2 : 3; }").unwrap();
         match &program.functions[0].body[1].node {
             Stmt::Return(Some(e)) => assert_eq!(e.ty, Type::Int),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_static_local_needs_a_constant_initializer() {
+        let err = typecheck("int f(int a) { static int n = a; return n; }").unwrap_err();
+        assert!(err.message.contains("not a constant"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn sizeof_an_expression_becomes_its_size() {
+        let program = typecheck("int main() { int a[10]; return sizeof a; }").unwrap();
+        match &program.functions[0].body[1].node {
+            Stmt::Return(Some(e)) => assert_eq!(e.node, Expr::IntLiteral(40)),
             other => panic!("got {other:?}"),
         }
     }

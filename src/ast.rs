@@ -32,6 +32,11 @@ pub enum Type {
     Pointer(Box<Type>),
     Array(Box<Type>, usize),
     Struct { tag: Option<String>, fields: Vec<StructField>, size: usize, align: usize },
+    /// A struct named inside its own definition, as in `struct Node *next;`. A `Type`
+    /// cannot contain itself, so this holds only the tag and the finished layout.
+    /// The type checker swaps in the full `Struct` from `Program::structs` wherever
+    /// the fields are needed.
+    StructRef { tag: String, size: usize, align: usize },
     Unknown,
 }
 
@@ -43,7 +48,7 @@ impl Type {
             Type::Bool => 1,
             Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, len) => elem.size() * len,
-            Type::Struct { size, .. } => *size,
+            Type::Struct { size, .. } | Type::StructRef { size, .. } => *size,
             Type::Unknown => 8,
         }
     }
@@ -55,7 +60,7 @@ impl Type {
             Type::Bool => 1,
             Type::LongLong | Type::Pointer(_) | Type::Void => 8,
             Type::Array(elem, _) => elem.align(),
-            Type::Struct { align, .. } => *align,
+            Type::Struct { align, .. } | Type::StructRef { align, .. } => *align,
             Type::Unknown => 8,
         }
     }
@@ -93,6 +98,7 @@ impl Type {
                 Some(name) => format!("struct {name}"),
                 None => "struct <anonymous>".to_string(),
             },
+            Type::StructRef { tag, .. } => format!("struct {tag}"),
             Type::Unknown => "<unknown>".to_string(),
         }
     }
@@ -128,6 +134,9 @@ pub enum Expr {
     PostIncDec(IncDec, Box<TypedExpr>),     // expr++ or expr--
     Member(Box<TypedExpr>, String),         // expr.field
     Ternary(Box<TypedExpr>, Box<TypedExpr>, Box<TypedExpr>), // cond ? then : else
+    /// `sizeof expr`. The type checker replaces it with an `IntLiteral` and never
+    /// evaluates the operand. `sizeof(type)` folds in the parser.
+    SizeOf(Box<TypedExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +180,9 @@ pub enum Stmt {
     /// so a block adds no scope of its own.
     Block(Vec<Spanned<Stmt>>),
     VarDecl { ty: Type, name: String, init: Option<TypedExpr> },
+    /// A `static` local. It lives in `.data`, so it keeps its value between calls,
+    /// and its initializer must be a constant.
+    StaticLocal { ty: Type, name: String, init: Option<TypedExpr> },
     If {
         cond: TypedExpr,
         then_branch: Vec<Spanned<Stmt>>,
@@ -222,6 +234,8 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub decls: Vec<FuncDecl>,
     pub globals: Vec<GlobalVar>,
+    /// Every tagged struct, by tag. Resolves a `Type::StructRef`.
+    pub structs: std::collections::HashMap<String, Type>,
 }
 
 

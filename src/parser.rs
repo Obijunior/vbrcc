@@ -41,6 +41,9 @@ pub struct Parser {
     enum_constants: HashMap<String, i64>,
     /// How many loops enclose the current statement. `continue` needs at least one.
     loop_depth: usize,
+    /// Tags of the structs whose bodies are being parsed, innermost last. A member
+    /// may point to one of these: `struct Node *next;`.
+    defining_structs: Vec<String>,
     /// The open `switch` statements, innermost last. `break` needs a loop or one of
     /// these.
     switches: Vec<SwitchScope>,
@@ -68,6 +71,7 @@ impl Parser {
             typedefs: HashMap::new(), structs: HashMap::new(),
             enums: HashMap::new(), enum_constants: HashMap::new(),
             loop_depth: 0,
+            defining_structs: Vec::new(),
             switches: Vec::new(),
         }
     }
@@ -159,6 +163,11 @@ impl Parser {
         let mut decls = Vec::new();
         let mut globals = Vec::new();
         while self.current() != &Token::EOF {
+            // There is one translation unit, so internal linkage changes nothing.
+            // `static` on a function or a global is accepted and dropped.
+            while self.current() == &Token::Static {
+                self.advance();
+            }
             if self.current() == &Token::Typedef {
                 self.parse_typedef()?;
                 continue;
@@ -212,11 +221,11 @@ impl Parser {
                 TopLevel::Global(g) => globals.extend(g),
             }
         }
-        Ok(Program { functions, decls, globals })
+        Ok(Program { functions, decls, globals, structs: self.structs.clone() })
     }
 
     fn is_type_start(&self, tok: &Token) -> bool {
-        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const | Token::Struct | Token::Enum)
+        matches!(tok, Token::Int | Token::Char | Token::Bool | Token::Long | Token::Void | Token::Const | Token::Struct | Token::Enum | Token::Static)
             || matches!(tok, Token::Ident(name) if self.typedefs.contains_key(name))
     }
 
@@ -997,6 +1006,10 @@ impl Parser {
     /// checker.
     fn parse_decl(&mut self) -> Result<Vec<Spanned<Stmt>>, CompileError> {
         let mut decl_start = self.current_span();
+        let is_static = self.current() == &Token::Static;
+        if is_static {
+            self.advance();
+        }
         let base = self.parse_base_type()?;
         let mut out = Vec::new();
 
@@ -1010,10 +1023,12 @@ impl Parser {
             } else {
                 None
             };
-            out.push(Spanned::new(
-                Stmt::VarDecl { ty, name, init },
-                decl_start.to(self.previous_span()),
-            ));
+            let stmt = if is_static {
+                Stmt::StaticLocal { ty, name, init }
+            } else {
+                Stmt::VarDecl { ty, name, init }
+            };
+            out.push(Spanned::new(stmt, decl_start.to(self.previous_span())));
 
             if self.current() != &Token::Comma {
                 break;
@@ -1028,6 +1043,23 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<TypedExpr, CompileError> {
         let start = self.current_span();
+
+        // `sizeof(type)` folds here. `sizeof expr` needs the expression's type, so the
+        // type checker folds it.
+        if self.current() == &Token::Sizeof {
+            self.advance();
+            if self.current() == &Token::LParen && self.is_type_start(self.peek()) {
+                self.advance(); // (
+                let ty = self.parse_type()?;
+                let (ty, _) = self.parse_array_suffix(ty, false)?;
+                self.expect(&Token::RParen)?;
+                let span = start.to(self.previous_span());
+                return Ok(TypedExpr::new(Expr::IntLiteral(ty.size() as i64), span));
+            }
+            let operand = self.parse_unary()?;
+            let span = start.to(self.previous_span());
+            return Ok(TypedExpr::new(Expr::SizeOf(Box::new(operand)), span));
+        }
 
         // cast: ( type ) unary
         if self.current() == &Token::LParen && self.is_type_start(self.peek()) {
@@ -1233,25 +1265,8 @@ impl Parser {
         Ok(ty)
     }
 
-    /// Parse a `struct` type reference or definition. Current token is `Token::Struct`.
-    fn parse_struct_type(&mut self) -> Result<Type, CompileError> {
-        self.advance(); // 'struct'
-        let tag = match self.current().clone() {
-            Token::Ident(name) => { self.advance(); Some(name) }
-            _ => None,
-        };
-
-        if self.current() != &Token::LBrace {
-            // A bare reference: `struct Tag`. Must already be defined.
-            let name = tag.ok_or_else(|| CompileError::new(
-                "anonymous struct needs a body", self.current_span(),
-            ))?;
-            return self.structs.get(&name).cloned().ok_or_else(|| {
-                CompileError::new(format!("unknown struct `{name}`"), self.previous_span())
-            });
-        }
-
-        self.advance(); // '{'
+    /// The members of a struct body, through the closing `}`.
+    fn parse_struct_members(&mut self) -> Result<Vec<(Type, String)>, CompileError> {
         let mut members: Vec<(Type, String)> = Vec::new();
         while self.current() != &Token::RBrace {
             // One line of members shares a base type but each name carries its
@@ -1259,8 +1274,25 @@ impl Parser {
             let base = self.parse_base_type()?;
             loop {
                 let mty = self.parse_pointer_suffix(base.clone());
+                let name_span = self.current_span();
                 let mname = self.expect_ident("a member name")?;
                 let (mty, _) = self.parse_array_suffix(mty, false)?;
+                // A struct may point to itself, but not contain a copy of itself.
+                let by_value = match &mty {
+                    Type::StructRef { tag, .. } => Some(tag.clone()),
+                    Type::Array(elem, _) => match &**elem {
+                        Type::StructRef { tag, .. } => Some(tag.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(tag) = by_value {
+                    return Err(CompileError::new(
+                        format!("member `{mname}` has incomplete type `struct {tag}`"),
+                        name_span,
+                    )
+                    .with_label("a struct can hold a pointer to itself, not a copy"));
+                }
                 members.push((mty, mname));
                 if self.current() != &Token::Comma {
                     break;
@@ -1270,12 +1302,66 @@ impl Parser {
             self.expect(&Token::Semicolon)?;
         }
         self.expect(&Token::RBrace)?;
-
         if members.is_empty() {
             return Err(CompileError::new("an empty struct is not supported", self.previous_span()));
         }
+        Ok(members)
+    }
 
-        let (fields, size, align) = Self::layout_struct(&members);
+    /// Give each `StructRef` to `tag` inside `ty` the finished layout.
+    fn fill_struct_ref(ty: &mut Type, tag: &str, size: usize, align: usize) {
+        match ty {
+            Type::StructRef { tag: t, size: s, align: a } if t.as_str() == tag => {
+                *s = size;
+                *a = align;
+            }
+            Type::Pointer(inner) | Type::Array(inner, _) => {
+                Self::fill_struct_ref(inner, tag, size, align)
+            }
+            _ => {}
+        }
+    }
+
+    /// Parse a `struct` type reference or definition. Current token is `Token::Struct`.
+    fn parse_struct_type(&mut self) -> Result<Type, CompileError> {
+        self.advance(); // 'struct'
+        let tag = match self.current().clone() {
+            Token::Ident(name) => { self.advance(); Some(name) }
+            _ => None,
+        };
+
+        if self.current() != &Token::LBrace {
+            // A bare reference: `struct Tag`. Must already be defined, or be a
+            // struct whose body is being parsed.
+            let name = tag.ok_or_else(|| CompileError::new(
+                "anonymous struct needs a body", self.current_span(),
+            ))?;
+            if let Some(ty) = self.structs.get(&name) {
+                return Ok(ty.clone());
+            }
+            if self.defining_structs.contains(&name) {
+                // The layout is not known yet. `fill_struct_ref` sets it.
+                return Ok(Type::StructRef { tag: name, size: 0, align: 0 });
+            }
+            return Err(CompileError::new(format!("unknown struct `{name}`"), self.previous_span()));
+        }
+
+        self.advance(); // '{'
+        if let Some(name) = &tag {
+            self.defining_structs.push(name.clone());
+        }
+        let members = self.parse_struct_members();
+        if tag.is_some() {
+            self.defining_structs.pop();
+        }
+        let members = members?;
+
+        let (mut fields, size, align) = Self::layout_struct(&members);
+        if let Some(name) = &tag {
+            for f in &mut fields {
+                Self::fill_struct_ref(&mut f.ty, name, size, align);
+            }
+        }
         let ty = Type::Struct { tag: tag.clone(), fields, size, align };
         if let Some(name) = tag {
             self.structs.insert(name, ty.clone());
@@ -2248,6 +2334,56 @@ mod tests {
             Stmt::If { then_branch, else_branch, .. } if then_branch.len() == 1 && else_branch.len() == 1));
         assert!(matches!(body[1].node, Stmt::While { .. }));
         assert!(matches!(body[2].node, Stmt::For { cond: None, update: None, .. }));
+    }
+
+    #[test]
+    fn a_struct_may_point_to_itself() {
+        let program = parse_src(
+            "struct Node { int v; struct Node *next; }; int main() { struct Node n; return 0; }",
+        ).unwrap();
+        match &program.functions[0].body[0].node {
+            Stmt::VarDecl { ty: Type::Struct { size, fields, .. }, .. } => {
+                assert_eq!(*size, 16);
+                assert!(matches!(&fields[1].ty,
+                    Type::Pointer(t) if matches!(**t, Type::StructRef { size: 16, align: 8, .. })));
+            }
+            other => panic!("expected a struct local, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_struct_cannot_contain_itself_by_value() {
+        let err = parse_src("struct Node { int v; struct Node next; };").unwrap_err();
+        assert!(err.message.contains("incomplete"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn sizeof_a_type_folds_to_a_literal() {
+        assert_eq!(expr_of("sizeof(long long);"), Expr::IntLiteral(8));
+        assert_eq!(expr_of("sizeof(int *);"), Expr::IntLiteral(8));
+        assert_eq!(expr_of("sizeof(char[5]);"), Expr::IntLiteral(5));
+    }
+
+    #[test]
+    fn sizeof_an_expression_waits_for_the_type_checker() {
+        assert!(matches!(expr_of("sizeof x;"), Expr::SizeOf(_)));
+        assert!(matches!(expr_of("sizeof (x) + 1;"), Expr::BinaryOp(BinaryOp::Add, ..)));
+    }
+
+    #[test]
+    fn static_is_accepted_on_functions_and_globals() {
+        let program = parse_src(
+            "static int g = 1; static int f(void); static int f(void) { return g; }",
+        ).unwrap();
+        assert_eq!(program.globals.len(), 1);
+        assert_eq!(program.functions.len(), 1);
+    }
+
+    #[test]
+    fn a_static_local_parses_into_its_own_statement() {
+        let program = parse_src("int f() { static int n = 3; return n; }").unwrap();
+        assert!(matches!(&program.functions[0].body[0].node,
+            Stmt::StaticLocal { name, init: Some(_), .. } if name == "n"));
     }
 
     #[test]
