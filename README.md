@@ -272,8 +272,9 @@ example a dereference of a value that is not a pointer.
 
 A header set ships inside the binary, so an install needs no data files: `assert.h`,
 `ctype.h`, `errno.h`, `iso646.h`, `limits.h`, `stdbool.h`, `stddef.h`, `stdint.h`,
-`stdio.h`, `stdlib.h`, `string.h`, and `time.h`. Each one declares only functions that
-`msvcrt.dll` exports and that the compiler can call. So a header can be partial:
+`stdio.h`, `stdlib.h`, `string.h`, and `time.h`, plus the POSIX `unistd.h`. Each one
+declares only functions that `msvcrt.dll` exports and that the compiler can call. So a
+header can be partial:
 
 - `size_t` is a `typedef` of `long long`, because `unsigned` does not exist yet.
 - A function that needs `double`, a function pointer, or `va_list` is left out, for
@@ -282,6 +283,10 @@ A header set ships inside the binary, so an install needs no data files: `assert
   string with a NUL.
 - `assert` prints a fixed message, not the failed expression, until the preprocessor
   supports `#` stringizing.
+- `unistd.h` is POSIX, not C99, and Windows has no native one. msvcrt exports the calls
+  with a leading underscore (`_read`, `_write`, `_getpid`, ...), so the header maps each
+  plain name onto that with a macro, as MinGW does. `sleep(s)` becomes
+  `_sleep(s * 1000)`. `fork`, `usleep`, and `getopt` do not exist on Windows.
 
 `-E` prints the preprocessed source and exits. This is the fastest way to see what
 expansion produced.

@@ -23,6 +23,8 @@ static BUNDLED: &[(&str, &str)] = &[
     ("assert.h", include_str!("../headers/assert.h")),
     ("time.h", include_str!("../headers/time.h")),
     ("iso646.h", include_str!("../headers/iso646.h")),
+    // POSIX, not C99. Maps the plain names onto msvcrt's `_read`, `_write`, ...
+    ("unistd.h", include_str!("../headers/unistd.h")),
 ];
 
 #[derive(Debug)]
