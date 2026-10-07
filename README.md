@@ -3,8 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/vbrcc.svg)](https://crates.io/crates/vbrcc)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Downloads](https://img.shields.io/crates/d/vbrcc.svg)](https://crates.io/crates/vbrcc)
-<!-- [![Docs.rs](https://docs.rs/vbrcc/badge.svg)](https://docs.rs/vbrcc) -->
-<!-- [![CI](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml/badge.svg)](https://github.com/obijunior/vbrcc/actions/workflows/ci.yml) -->
 
 A hobby C compiler and x86-64 assembler, written from scratch in Rust.
 
