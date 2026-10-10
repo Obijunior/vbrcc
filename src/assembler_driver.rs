@@ -152,7 +152,8 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path, verbose: bool) -
     // Step 3: lld-link -> .exe
     let sdk = find_windows_sdk_lib()?;
     let mut lld_args = vec![
-        format!("/entry:main"),
+        // codegen's start stub: calls main, then exit.
+        "/entry:__vbrcc_start".to_string(),
         "/subsystem:console".to_string(),
         format!("/out:{}", bin_path.to_str().unwrap()),
         obj_path.to_str().unwrap().to_string(),

@@ -18,15 +18,16 @@ resolves against `msvcrt.dll` at load time.
 ## `return42.c`
 
 This is the smallest program the compiler handles. Use it as the first check that a
-build works. It calls nothing, so the output has no import table:
+build works. It calls no library function, but the import table still lists `exit`,
+because the start stub ends the process through msvcrt:
 
 ```console
 $ vbrcc examples/return42.c -o ret --verbose
 [ SUCCESS ] :: Wrote assembly to "ret.s"
 [ SUCCESS ] :: Created Windows Executable: "ret.exe"
-  - .text size: 34 bytes
+  - .text size: 55 bytes
   - .data size: 0 bytes
-  - .idata size: 0 bytes
+  - .idata size: 90 bytes
 [ SUCCESS ] :: Compiled binary to "ret.exe"
 
 $ ./ret.exe; echo $?

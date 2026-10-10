@@ -314,6 +314,9 @@ impl Codegen {
         for function in &program.functions {
             self.gen_function(function)?;
         }
+        if program.functions.iter().any(|f| f.name == "main") {
+            self.gen_start_stub();
+        }
 
         // Assemble final output: data section first, then text
         let mut final_output = String::new();
@@ -330,6 +333,23 @@ impl Codegen {
         Ok(final_output)
     }
 
+
+    /// The process entry point: call `main`, then pass its result to msvcrt's `exit`.
+    ///
+    /// Returning from the entry point ends only the main thread. A DLL-loader worker
+    /// thread can outlive it, so the process then runs on for up to 30 s, until the
+    /// worker's idle timeout, and takes the worker's exit code (0) instead of
+    /// `main`'s. `exit` flushes stdio and ends every thread at once.
+    fn gen_start_stub(&mut self) {
+        self.emit("  .globl __vbrcc_start");
+        self.emit("__vbrcc_start:");
+        // On entry rsp is 8 mod 16, from the return address. 40 = 32 bytes of
+        // shadow space for the calls, plus 8 to make rsp 16-byte aligned.
+        self.emit("  sub rsp, 40");
+        self.emit("  call main");
+        self.emit("  mov rcx, rax");
+        self.emit("  call exit");
+    }
 
     fn gen_function(&mut self, func: &Function) -> Result<(), CompileError> {
         self.variables.clear();
@@ -1396,6 +1416,28 @@ mod tests {
         let asm = compile("_Bool b = 5; int main() { return b; }");
         assert!(asm.contains("b:"), "asm:\n{asm}");
         assert!(asm.contains(".byte 1"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_program_with_main_gets_a_start_stub_that_calls_exit() {
+        let asm = compile("int main() { return 7; }");
+        let stub = &asm[asm.find("__vbrcc_start:").expect("no start stub")..];
+        // Entry rsp is 8 mod 16 (the return address). 40 = 32 shadow + 8 to realign.
+        let expected = "__vbrcc_start:
+  sub rsp, 40
+  call main
+  mov rcx, rax
+  call exit
+";
+        assert!(stub.starts_with(expected), "stub:
+{stub}");
+    }
+
+    #[test]
+    fn a_program_without_main_gets_no_start_stub() {
+        let asm = compile("int helper() { return 1; }");
+        assert!(!asm.contains("__vbrcc_start"), "asm:
+{asm}");
     }
 
     #[test]

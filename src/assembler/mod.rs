@@ -237,9 +237,15 @@ pub fn assemble(source: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, u32), String
         }
     }
 
-    let entry_offset = match labels.get("main") {
+    // The entry point is the start stub that codegen emits, which calls `main` and
+    // then `exit`. Hand-written assembly with no stub starts at `main` directly.
+    if !matches!(labels.get("main"), Some((Section::Text, _))) {
+        return Err("no `main` function found".to_string());
+    }
+    let entry_label = if labels.contains_key("__vbrcc_start") { "__vbrcc_start" } else { "main" };
+    let entry_offset = match labels.get(entry_label) {
         Some((Section::Text, off)) => *off as u32,
-        _ => return Err("no `main` function found".to_string()),
+        _ => return Err(format!("`{entry_label}` is not in .text")),
     };
 
     let text_rva: u32 = 0x1000;

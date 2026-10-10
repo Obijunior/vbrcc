@@ -187,6 +187,10 @@ The code generator follows these rules:
   target is `loop_N_next`. That label sits before the update or the condition, so
   `continue` does not skip them. A `switch` pushes only on `break_labels`, so a
   `continue` inside it still reaches the enclosing loop.
+- The process entry point is a stub, `__vbrcc_start`, that calls `main` and passes the
+  result to msvcrt's `exit`. Do not make `main` the entry point. Returning from the entry
+  point ends only the main thread, and a DLL-loader worker thread can keep the process
+  alive for up to 30 seconds and give it exit code 0.
 
 The rule about `push` is a correctness rule, not a style rule. A callee measures
 its 32 bytes of shadow space from `rsp`. A `push` moves `rsp` down by 8, so the

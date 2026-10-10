@@ -46,9 +46,9 @@ unless you pass `--keep-artifacts`. On success it is silent unless you pass `--v
 $ vbrcc examples/return42.c -o program --verbose
 [ SUCCESS ] :: Wrote assembly to "program.s"
 [ SUCCESS ] :: Created Windows Executable: "program.exe"
-  - .text size: 34 bytes
+  - .text size: 55 bytes
   - .data size: 0 bytes
-  - .idata size: 0 bytes
+  - .idata size: 90 bytes
 [ SUCCESS ] :: Compiled binary to "program.exe"
 ```
 
