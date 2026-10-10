@@ -3,8 +3,7 @@
 
 #include <stddef.h>
 
-/* These resolve against msvcrt at link time. The call limit is four
-   arguments, so printf accepts three values and fprintf two. */
+/* These resolve against msvcrt at link time. */
 
 /* msvcrt's x64 FILE layout, 48 bytes. The fields are private. The size
    matters to msvcrt's __iob_func, which returns an array of FILE. */

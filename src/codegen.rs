@@ -10,9 +10,10 @@
 //!   there, not its bytes.
 //! - `rsp` does not move after the prologue. Intermediate values go into frame slots
 //!   through `spill_rax`, never through `push`. See that method for the reason.
-//! - Call arguments go into frame slots first. The generator loads `rcx`, `rdx`, `r8`,
-//!   and `r9` immediately before the `call`, because any expression it evaluates in
-//!   between overwrites `rcx`.
+//! - Call arguments go into frame slots first. Immediately before the `call`, the
+//!   generator copies argument n to its Win64 slot at `[rsp + 8n]` and loads the first
+//!   four into `rcx`, `rdx`, `r8`, and `r9`. Any expression evaluated in between would
+//!   overwrite them, and a nested call would reuse the same outgoing area.
 //! - Locals live at negative offsets from `rbp`. The `variables` map holds each offset.
 //!   Slots are never reused, so a function reserves 8 bytes for each spill site.
 //! - Every label carries a number, such as `loop_0_start`. Nested control flow cannot
@@ -52,6 +53,9 @@ pub struct Codegen {
     static_labels: HashMap<String, String>,
     /// The function being generated, for `static` local labels.
     current_fn: String,
+    /// The most argument slots any call in the current function needs, at least 4
+    /// for the shadow space. Sizes the outgoing area at the bottom of the frame.
+    max_call_slots: usize,
     /// Jump targets for `break` and `continue`, innermost last.
     break_labels: Vec<String>,
     continue_labels: Vec<String>,
@@ -70,6 +74,7 @@ impl Codegen {
             hidden_ret: None,
             static_labels: HashMap::new(),
             current_fn: String::new(),
+            max_call_slots: 4,
             break_labels: Vec::new(),
             continue_labels: Vec::new(),
         }
@@ -332,6 +337,7 @@ impl Codegen {
         self.current_fn = func.name.clone();
         self.stack_offset = 0;
         self.hidden_ret = None;
+        self.max_call_slots = 4;
 
         // Header + prologue, up to but NOT including the frame reservation.
         self.emit("  .intel_syntax noprefix");
@@ -359,13 +365,14 @@ impl Codegen {
 
         for (i, (ty, param)) in func.params.iter().enumerate() {
             let reg_idx = reg_base + i;
-            if reg_idx >= arg_regs.len() {
-                return Err(CompileError::new(
-                    format!("functions with more than {} parameters are not supported", arg_regs.len()),
-                    func.span,
-                ));
-            }
-            let reg = arg_regs[reg_idx];
+            let reg = if reg_idx < arg_regs.len() {
+                arg_regs[reg_idx]
+            } else {
+                // Argument n past the fourth is in the caller's slot [rsp + 8n]. After
+                // the return address and the saved rbp, that is [rbp + 16 + 8n].
+                self.emit(&format!("  mov rax, [rbp + {}]", 16 + 8 * reg_idx));
+                "rax"
+            };
             match ty {
                 Type::Struct { size, align, .. } if Codegen::abi_is_memory(ty) => {
                     // Arrived as a pointer to the caller's copy. Take a local
@@ -393,9 +400,12 @@ impl Codegen {
 
         let body = std::mem::replace(&mut self.output, outer);
 
-        // Frame = locals/params bytes + 32 shadow space, rounded up to 16-byte alignment.
+        // Frame = locals/params bytes + the outgoing argument area, rounded up to
+        // 16-byte alignment. The outgoing area is never less than the 32-byte shadow
+        // space, and grows to the widest call in the function.
         let locals_bytes = -self.stack_offset;            // >= 0
-        let frame = Codegen::align_up(locals_bytes + 32, 16);
+        let outgoing = 8 * self.max_call_slots as i64;
+        let frame = Codegen::align_up(locals_bytes + outgoing, 16);
         self.emit(&format!("  sub rsp, {}", frame));
         self.output.push_str(&body);
 
@@ -789,8 +799,8 @@ impl Codegen {
             }
 
             Expr::FunctionCall {name, args} => {
-                // Win64 passes the first four integer arguments in these registers.
-                // Stack arguments do not exist yet, so a call takes at most four.
+                // Win64 passes the first four integer arguments in these registers,
+                // and every argument in its slot at [rsp + 8n].
                 let arg_regs = ["rcx", "rdx", "r8", "r9"];
 
                 let ret_mem = Codegen::abi_is_memory(&expr.ty);
@@ -799,13 +809,7 @@ impl Codegen {
                     _ => None,
                 };
                 let reg_base = if ret_mem { 1 } else { 0 };
-
-                if reg_base + args.len() > arg_regs.len() {
-                    return Err(CompileError::new(
-                        format!("function calls with more than {} arguments are not supported", arg_regs.len()),
-                        expr.span,
-                    ));
-                }
+                self.max_call_slots = self.max_call_slots.max(reg_base + args.len());
 
                 // Evaluate every argument into a frame slot before any register load.
                 let mut slots = Vec::with_capacity(args.len());
@@ -834,11 +838,19 @@ impl Codegen {
                     }
                 }
 
-                // Nothing runs between here and the call, so the registers are safe.
+                // Nothing runs between here and the call, so the outgoing slots and the
+                // registers are safe. Fill the stack-only slots first, while rax is free.
+                for (i, slot) in slots.iter().enumerate() {
+                    let n = reg_base + i;
+                    if n >= arg_regs.len() {
+                        self.reload("rax", *slot);
+                        self.emit(&format!("  mov [rsp + {}], rax", n * 8));
+                    }
+                }
                 if let Some(slot) = ret_slot {
                     self.emit(&format!("  lea {}, [rbp - {}]", arg_regs[0], -slot));
                 }
-                for (i, slot) in slots.iter().enumerate() {
+                for (i, slot) in slots.iter().enumerate().take(arg_regs.len() - reg_base) {
                     let reg = arg_regs[reg_base + i];
                     self.reload(reg, *slot);
                     // A variadic callee reads its named arguments from shadow space.
@@ -1384,6 +1396,32 @@ mod tests {
         let asm = compile("_Bool b = 5; int main() { return b; }");
         assert!(asm.contains("b:"), "asm:\n{asm}");
         assert!(asm.contains(".byte 1"), "asm:\n{asm}");
+    }
+
+    #[test]
+    fn a_fifth_argument_uses_its_stack_slot() {
+        // Win64: argument n lives at [rsp + 8n] at the call, so the fifth
+        // (n = 4) is at [rsp + 32]. The callee finds it past the saved rbp and
+        // the return address, at [rbp + 16 + 32].
+        let asm = compile(
+            "int f(int a, int b, int c, int d, int e) { return e; } \
+             int main() { return f(1, 2, 3, 4, 5); }",
+        );
+        assert!(asm.contains("  mov [rsp + 32], rax"), "caller:\n{asm}");
+        assert!(asm.contains("  mov rax, [rbp + 48]"), "callee:\n{asm}");
+        assert!(!asm.contains("push rax"), "rsp must not move:\n{asm}");
+    }
+
+    #[test]
+    fn the_frame_reserves_the_largest_outgoing_area() {
+        // Six arguments need a 48-byte outgoing area, not the 32-byte minimum.
+        // main's frame is its six 8-byte argument spills (48) plus that area (48).
+        let asm = compile(
+            "int f(int a, int b, int c, int d, int e, int g) { return a; } \
+             int main() { return f(1, 2, 3, 4, 5, 6); }",
+        );
+        let main = &asm[asm.find("main:").unwrap()..];
+        assert!(main.contains("sub rsp, 96"), "main frame:\n{main}");
     }
 
     #[test]

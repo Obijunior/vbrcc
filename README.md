@@ -153,11 +153,10 @@ More sample programs live in [`examples/`](https://github.com/obijunior/vbrcc/tr
 > **A cast changes the type, not the value.** The code generator does not truncate or
 > extend the operand yet, so `(char)300` is still 300 and `(_Bool)5` is still 5.
 
-> **Four arguments is the limit.** This applies to a function's parameter list and to a
-> call's argument list. Win64 passes the first four in registers. VBRCC does not write
-> stack arguments yet, because the code generator never moves `rsp` after the prologue.
-> A struct returned in memory uses one of the four slots, so such a call takes at most
-> three arguments.
+> **Any number of arguments works.** Win64 passes the first four in `rcx`, `rdx`, `r8`,
+> and `r9`, and every argument in its own 8-byte stack slot. The code generator writes
+> those slots into an outgoing area reserved in the prologue, so `rsp` still never moves
+> after it.
 
 ### Types
 
@@ -246,7 +245,6 @@ example a dereference of a value that is not a pointer.
 * The storage-class and function specifiers `extern`, `inline`, and `register`
 * Designated initializers (`{ .x = 1, [3] = 7 }`), compound literals, and a string
   inside a brace initializer
-* More than four function parameters or call arguments
 * Integer promotion and the usual arithmetic conversions
 * Block-level scope. Every variable shares one flat scope for each function
 * A bitfield and a braced `struct` initializer
@@ -390,6 +388,7 @@ cargo test
 - `struct`: member access, whole-struct copy, pass and return by value, and globals
 - Several names in one declaration, such as `int a, b = 5;`
 - Self-referential structs, `sizeof`, and `static`
+- Any number of function parameters and call arguments
 - `do`-`while`, `switch`, `break`, `continue`, empty `for` clauses, blocks, and `return;`
 
 **Next**
@@ -397,7 +396,6 @@ cargo test
 - Extend the built-in import table to multiple DLLs (`kernel32`, `user32`, the UCRT)
 - Designated initializers and compound literals
 - `union`
-- More than four function parameters or call arguments
 - `unsigned` integer types
 - Preprocessor: `#` stringizing, `##` pasting, `__VA_ARGS__`
 - Block-level scope

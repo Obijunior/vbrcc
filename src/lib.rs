@@ -52,8 +52,6 @@
 //!
 //! - The default backend imports only from `msvcrt.dll`. `--lld-link` adds `kernel32`.
 //!   A call into any other DLL builds and then fails at load time.
-//! - A call takes at most four arguments, because stack arguments do not exist yet. The
-//!   code generator reports an error past `rcx`, `rdx`, `r8`, and `r9`.
 //! - A cast changes the type of a value, not its bits. `(char)300` stays 300.
 
 pub mod lexer;
