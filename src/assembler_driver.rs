@@ -1,6 +1,6 @@
 //! Stage 5 driver: choosing an output mode and producing the final binary.
 //!
-//! [`assemble_and_link`] takes the generated `.s` file and turns it into an executable
+//! [`assemble_and_link`] takes the generated assembly text and turns it into an executable
 //! using one of three strategies, selected by [`LinkerMode`]:
 //!
 //! | Mode | CLI flag | What happens | Requires |
@@ -18,7 +18,8 @@
 //! ways and compare the two disassemblies to find a miscompilation in the built-in
 //! path.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use crate::assembler;
 
@@ -41,26 +42,69 @@ pub enum LinkerMode {
     LldLink,    // --lld-link: custom assembler emits .obj, lld-link links
 }
 
-pub fn assemble_and_link(asm_path: &Path, bin_path: &Path, linker: LinkerMode, verbose: bool) -> Result<(), String> {
+/// Turn `asm` into an executable at `bin_path`.
+///
+/// Intermediate files go next to `output_path` (`.s`, `.obj`, `.def`, `.lib`).
+/// Each file this function creates is added to `created`, also when it fails.
+/// If an intermediate file exists already, the function stops with an error.
+/// `overwrite` allows it. The default mode creates no intermediate file.
+pub fn assemble_and_link(
+    asm: &str,
+    output_path: &Path,
+    bin_path: &Path,
+    linker: LinkerMode,
+    verbose: bool,
+    overwrite: bool,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), String> {
     match linker {
         LinkerMode::CustomPe => {
-            assemble_to_pe(asm_path, bin_path, verbose)?;
+            assemble_to_pe(asm, bin_path, verbose)?;
         }
         LinkerMode::Gcc => {
-            assemble_and_link_with_gcc(asm_path, bin_path)?;
+            let asm_path = output_path.with_extension("s");
+            write_artifact(&asm_path, asm.as_bytes(), overwrite, created)?;
+            if verbose {
+                println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
+            }
+            assemble_and_link_with_gcc(&asm_path, bin_path)?;
         }
         LinkerMode::LldLink => {
-            assemble_and_link_with_lld(asm_path, bin_path, verbose)?;
+            assemble_and_link_with_lld(asm, output_path, bin_path, verbose, overwrite, created)?;
         }
     }
     Ok(())
 }
 
-fn assemble_to_pe(asm_path: &Path, out_path: &Path, verbose: bool) -> Result<(), String> {
-    let source = std::fs::read_to_string(asm_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
+/// Write an intermediate file. Without `overwrite`, an existing file is an error,
+/// so the build never destroys a file that the user owns.
+fn write_artifact(
+    path: &Path,
+    bytes: &[u8],
+    overwrite: bool,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if overwrite {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = options.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("Refusing to overwrite existing file {:?}", path)
+        } else {
+            format!("Failed to write {:?}: {}", path, e)
+        }
+    })?;
+    created.push(path.to_path_buf());
+    file.write_all(bytes)
+        .map_err(|e| format!("Failed to write {:?}: {}", path, e))
+}
 
-    let (text, data, idata, entry_offset) = assembler::assemble(&source)?;
+fn assemble_to_pe(asm: &str, out_path: &Path, verbose: bool) -> Result<(), String> {
+    let (text, data, idata, entry_offset) = assembler::assemble(asm)?;
     let pe = assembler::pe::create_pe_wrapper(&text, &data, &idata, entry_offset);
 
     std::fs::write(out_path, pe)
@@ -96,19 +140,22 @@ fn assemble_and_link_with_gcc(asm_path: &Path, bin_path: &Path) -> Result<(), St
     Ok(())
 }
 
-fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path, verbose: bool) -> Result<(), String> {
-    let obj_path = asm_path.with_extension("obj");
+fn assemble_and_link_with_lld(
+    asm: &str,
+    output_path: &Path,
+    bin_path: &Path,
+    verbose: bool,
+    overwrite: bool,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let obj_path = output_path.with_extension("obj");
 
     // Step 1: custom assembler -> COFF .obj
-    let source = std::fs::read_to_string(asm_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", asm_path, e))?;
-
-    let result = assembler::assemble_to_obj(&source)
+    let result = assembler::assemble_to_obj(asm)
         .map_err(|e| format!("assembler (COFF mode) failed: {}", e))?;
 
     let obj_bytes = assembler::coff::create_coff_obj(&result);
-    std::fs::write(&obj_path, obj_bytes)
-        .map_err(|e| format!("Failed to write .obj: {}", e))?;
+    write_artifact(&obj_path, &obj_bytes, overwrite, created)?;
 
     // Step 1b: write .def if there are external symbols
     let externals: Vec<&str> = result.symbols.iter()
@@ -125,8 +172,7 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path, verbose: bool) -
         for name in &externals {
             def.push_str(&format!("    {}\n", name));
         }
-        std::fs::write(&def_path, &def)
-            .map_err(|e| format!("Failed to write .def: {}", e))?;
+        write_artifact(&def_path, def.as_bytes(), overwrite, created)?;
     }
 
     if verbose {
@@ -135,6 +181,10 @@ fn assemble_and_link_with_lld(asm_path: &Path, bin_path: &Path, verbose: bool) -
 
     // Step 2: if assembler wrote a .def (has external symbols), generate import lib
     if has_externals {
+        if !overwrite && implib_path.exists() {
+            return Err(format!("Refusing to overwrite existing file {:?}", implib_path));
+        }
+        created.push(implib_path.clone());
         let status = Command::new("llvm-dlltool")
             .args([
                 "-m", "i386:x86-64",

@@ -85,6 +85,7 @@ fn collect_include_dirs(args: &[String]) -> Vec<PathBuf> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let mut created_artifacts: Vec<PathBuf> = Vec::new();
 
     // Handle informational flags before treating args[1] as an input file.
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -196,17 +197,6 @@ fn main() {
         eprintln!("{}", asm);
     }
 
-    // --- Write .s file ---
-    let asm_path = output_path.with_extension("s");
-    fs::write(&asm_path, &asm).unwrap_or_else(|e| {
-        eprintln!("[ ERROR ] :: Error writing {:?}: {}", asm_path, e);
-        process::exit(1);
-    });
-
-    if verbose {
-        println!("[ SUCCESS ] :: Wrote assembly to {:?}", asm_path);
-    }
-
     // --- Stage 5: Assemble and link ---
     let bin_path = if use_gcc || use_lld {
         output_path.with_extension("exe")
@@ -225,25 +215,31 @@ fn main() {
         assembler_driver::LinkerMode::CustomPe
     };
 
-    assembler_driver::assemble_and_link(&asm_path, &bin_path, linker, verbose).unwrap_or_else(|e| {
-        eprintln!("[ ERROR ] :: {}", e);
-        process::exit(1);
-    });
-
-    if verbose {
-        println!("[ SUCCESS ] :: Compiled binary to {:?}", bin_path);
-    }
+    // The driver records each intermediate file it creates. Only those files are
+    // deleted, so a file that the user already had is never removed.
+    let result = assembler_driver::assemble_and_link(
+        &asm,
+        &output_path,
+        &bin_path,
+        linker,
+        verbose,
+        keep_artifacts,
+        &mut created_artifacts,
+    );
 
     // Clean up intermediate artifacts unless --keep-artifacts is passed
     if !keep_artifacts {
-        let artifacts = [
-            output_path.with_extension("s"),
-            output_path.with_extension("obj"),
-            output_path.with_extension("def"),
-            output_path.with_extension("lib"),
-        ];
-        for path in &artifacts {
+        for path in &created_artifacts {
             let _ = fs::remove_file(path);
         }
+    }
+
+    if let Err(e) = result {
+        eprintln!("[ ERROR ] :: {}", e);
+        process::exit(1);
+    }
+
+    if verbose {
+        println!("[ SUCCESS ] :: Compiled binary to {:?}", bin_path);
     }
 }
