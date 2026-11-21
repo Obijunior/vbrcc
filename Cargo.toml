@@ -8,7 +8,7 @@ repository = "https://github.com/obijunior/vbrcc"
 readme = "README.md"
 keywords = ["compiler", "c", "x86-64", "assembler"]
 categories = ["compilers", "command-line-utilities"]
-exclude = ["/docs", "/.github", "/graphify-out", "/.vscode"]
+exclude = ["/docs", "/.github", "/graphify-out", "/.vscode", "/tests/c-testsuite"]
 
 # docs.rs builds on Linux by default, but vbrcc emits Windows PE/COFF and has
 # Windows-gated code in main.rs. Build the published docs under the MSVC target so
